@@ -6,18 +6,24 @@
 #include "skinny.h"
 
 /* ---- history ----
- * All of far memory, holding messages one after another. When it fills,
- * the oldest exchange is dropped, never the one in progress (from
- * turn_start on). */
+ * Far memory (far.s: an REU, or the RAM under I/O and the KERNAL), holding
+ * messages one after another: a header (the role, 'u' or 'a', then the
+ * text's length and its length as a JSON string, two bytes each), the
+ * text, and a 0. With the lengths, going through the messages and working
+ * out a request's Content-Length never has to read the text itself. When
+ * it fills, the oldest exchange is dropped, never the one in progress
+ * (from turn_start on). */
 
 unsigned int hist_len, hist_cap, turn_start;
 unsigned char hist_dropped, hist_truncated;
+unsigned char context_kb = 32;          /* the REU's history size, in K */
+static unsigned int msg_start, msg_len, msg_jlen;
 
 void hist_init(void)
 {
     far_init();
-    hist_cap = HIST_TOP - HIST_BASE;
     hist_clear();
+    hist_limit();
 }
 
 void hist_clear(void)
@@ -27,9 +33,14 @@ void hist_clear(void)
     hist_dropped = hist_truncated = 0;
 }
 
-unsigned int hist_next(unsigned int off)
+static unsigned int hist_word(unsigned int off)
 {
-    return far_next(HIST_BASE + off + 1) - HIST_BASE;
+    return far_peek(off) | (far_peek(off + 1) << 8);
+}
+
+unsigned int hist_next(unsigned int p)
+{
+    return p + HDR + 1 + hist_word(p + 1);
 }
 
 unsigned int hist_count(void)
@@ -48,21 +59,43 @@ static unsigned char drop_oldest(void)
         if (!turn_start) return k;
         if (k && hist_peek(0) != 'a') break;
         n = hist_next(0);
-        far_move(HIST_BASE, HIST_BASE + n, hist_len - n);
+        far_move(0, n, hist_len - n);
         hist_len -= n;
         turn_start -= n;
+        msg_start -= n;
         hist_dropped = 1;
     }
     return 1;
 }
 
+/* Sets the history's size: the REU's (context_kb), or the RAM's 12K;
+ * old messages that no longer fit are dropped. */
+void hist_limit(void)
+{
+    hist_cap = reu_banks ? (unsigned int)context_kb << 10 : HIST_TOP - 0xD000u;
+    turn_start = hist_len;
+    while (hist_len > hist_cap && drop_oldest())
+        ;
+}
+
 unsigned char hist_begin(unsigned char role)
 {
     hist_truncated = 0;
-    while (hist_len + 2 > hist_cap) {
+    while (hist_len + HDR + 2 > hist_cap) {
         if (!drop_oldest()) return 0;
     }
-    far_poke(HIST_BASE + hist_len++, role);
+    msg_start = hist_len;
+    msg_len = msg_jlen = 0;
+    far_poke(hist_len, role);
+    hist_len += HDR;
+    return 1;
+}
+
+/* How many characters c takes in a JSON string (net.c's tx_js). */
+unsigned char json_size(unsigned char c)
+{
+    if (c == '"' || c == '\\' || c == '\n') return 2;
+    if (c < 32 || c > 126) return 6;
     return 1;
 }
 
@@ -75,12 +108,18 @@ void hist_addc(unsigned char c)
             return;
         }
     }
-    far_poke(HIST_BASE + hist_len++, c);
+    far_poke(hist_len++, c);
+    ++msg_len;
+    msg_jlen += json_size(c);
 }
 
 void hist_end(void)
 {
-    far_poke(HIST_BASE + hist_len++, 0);
+    far_poke(hist_len++, 0);
+    far_poke(msg_start + 1, msg_len);
+    far_poke(msg_start + 2, msg_len >> 8);
+    far_poke(msg_start + 3, msg_jlen);
+    far_poke(msg_start + 4, msg_jlen >> 8);
 }
 
 /* ---- the request ---- */
@@ -138,7 +177,7 @@ static void body_chat(void)
         if (!first) tx_c(',');
         first = 0;
         tx_role(hist_peek(p) == 'u' ? "user" : "assistant");
-        tx_jsf(HIST_BASE + p + 1);
+        tx_jsf(p + HDR, hist_word(p + 3));
         tx_c('}');
     }
     tx_c(']');
@@ -504,7 +543,7 @@ void show_last_reply(void)
     pg_lines = 0;
     pg_quit = 0;
     out_color(C_TEXT);
-    for (p = last + 1; (ch = hist_peek(p)) && !pg_quit; ++p) md_c(ch);
+    for (p = last + HDR; (ch = hist_peek(p)) && !pg_quit; ++p) md_c(ch);
     md_end();
     pg_on = 0;
     out_bol();

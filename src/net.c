@@ -233,7 +233,9 @@ void tx_u(unsigned long n)
     tx_s(ultoa(n, buf, 10));
 }
 
-/* A JSON string, quoted and escaped, from memory or (tx_jsf) far memory. */
+/* A JSON string, quoted and escaped, from memory or (tx_jsf) from far
+ * memory, whose length as JSON the history keeps (so counting it is
+ * free). The escapes must match chat.c's json_size. */
 static unsigned char far_src;
 static const char *src;
 
@@ -271,10 +273,14 @@ void tx_js(const char *s)
     tx_jstr();
 }
 
-void tx_jsf(unsigned int addr)
+void tx_jsf(unsigned int off, unsigned int jlen)
 {
+    if (counting) {
+        body_len += jlen + 2;
+        return;
+    }
     far_src = 1;
-    src = (const char *)addr;
+    src = (const char *)off;
     tx_jstr();
 }
 

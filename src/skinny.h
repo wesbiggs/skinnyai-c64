@@ -130,31 +130,34 @@ void tx_s(const char *s);
 void tx_js(const char *s);
 void tx_u(unsigned long n);
 
-/* ---- far.s: RAM under I/O and the KERNAL ---- */
-void __fastcall__ far_init(void);
-unsigned char __fastcall__ far_peek(unsigned int addr);
-void __fastcall__ far_poke(unsigned int addr, unsigned char c);
-unsigned int __fastcall__ far_next(unsigned int addr);
+/* ---- far.s: the REU, or RAM under I/O and the KERNAL ---- */
+extern unsigned char reu_banks;         /* 64K banks in the REU, 0 if none */
+unsigned char __fastcall__ far_init(void);
+unsigned char __fastcall__ far_peek(unsigned int off);
+void __fastcall__ far_poke(unsigned int off, unsigned char c);
 void __fastcall__ far_move(unsigned int dst, unsigned int src, unsigned int n);
 
 /* ---- history (chat.c) ----
- * Messages are offsets into far memory: a role byte ('u' or 'a'), the
- * text, and a 0. */
-#define HIST_BASE 0xD000u
+ * Messages at offsets in far memory: a header (role, length, JSON length),
+ * the text, and a 0. */
+#define HDR 5
 #ifndef HIST_TOP
-#define HIST_TOP  0xFFF8u
+#define HIST_TOP  0xFFF8u               /* the end of the RAM history */
 #endif
-#define hist_peek(off) far_peek(HIST_BASE + (off))
+#define hist_peek(off) far_peek(off)
 extern unsigned int hist_len, hist_cap, turn_start;
 extern unsigned char hist_dropped, hist_truncated;
+extern unsigned char context_kb;
 void hist_init(void);
 void hist_clear(void);
+void hist_limit(void);
 unsigned char hist_begin(unsigned char role);
 void hist_addc(unsigned char c);
 void hist_end(void);
 unsigned int hist_count(void);
-unsigned int hist_next(unsigned int off);
-void tx_jsf(unsigned int addr);
+unsigned int hist_next(unsigned int p);
+unsigned char json_size(unsigned char c);
+void tx_jsf(unsigned int off, unsigned int jlen);
 
 /* ---- chat.c ---- */
 void chat_turn(const char *text);

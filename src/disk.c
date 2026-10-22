@@ -214,7 +214,7 @@ void mf_write(void (*put)(unsigned char))
     }
     for (p = 0; p < hist_len; p = hist_next(p)) {
         w_s(hist_peek(p) == 'u' ? "MESSAGE user " : "MESSAGE assistant ");
-        w_q((const char *)(HIST_BASE + p + 1), 1);
+        w_q((const char *)(p + HDR), 1);
     }
 }
 
@@ -622,6 +622,7 @@ static void cfg_line(void)
     else if (!strcmp(rline, "model")) strncpy(model, eq, sizeof model - 1);
     else if (!strcmp(rline, "key")) strncpy(apikey, eq, sizeof apikey - 1);
     else if (!strcmp(rline, "keepalive")) strncpy(keepalive, eq, sizeof keepalive - 1);
+    else if (!strcmp(rline, "context")) context_kb = atoi(eq);
     else if (!strcmp(rline, "system")) strncpy(sysmsg, eq, SYS_MAX - 1);
     else if (!strcmp(rline, "pager")) pager = *eq == '1';
     else if (!strcmp(rline, "markdown")) md_on = *eq == '1';
@@ -671,6 +672,7 @@ unsigned char cfg_save(void)
     cfg_put("model", model);
     if (apikey[0]) cfg_put("key", apikey);
     cfg_put("keepalive", keepalive);
+    cfg_put("context", utoa(context_kb, num, 10));
     cfg_put("pager", pager ? "1" : "0");
     cfg_put("markdown", md_on ? "1" : "0");
     cbm_k_clrch();

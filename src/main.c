@@ -116,6 +116,21 @@ static void url(void)
     out_s(utoa(port, num, 10));
 }
 
+/* Where the history is kept, and how big it is, e.g. "REU, 32K of 512K". */
+static void memory(char *s)
+{
+    char num[6];
+    if (!reu_banks) {
+        strcpy(s, "12K (no REU)");
+        return;
+    }
+    strcpy(s, "REU, ");
+    strcat(s, utoa(context_kb, num, 10));
+    strcat(s, "K of ");
+    strcat(s, reu_banks >= 16 ? utoa(reu_banks >> 4, num, 10) : utoa(reu_banks << 6, num, 10));
+    strcat(s, reu_banks >= 16 ? "M" : "K");
+}
+
 /* A row of the welcome table, as markdown for screen.c's table drawing. */
 static void row(const char *name, const char *value)
 {
@@ -147,6 +162,8 @@ static void welcome(void)
     row("Host", hostport);
     if (api == API_OLLAMA && keepalive[0]) row("Keep-alive", keepalive);
     row("Drive", utoa(drive, num, 10));
+    memory(hostport);
+    row("History", hostport);
     md_end();
     md_on = md;
     out_color(C_DIM);
@@ -226,6 +243,7 @@ static void help_set(void)
         "pager / nopager\n"
         "autosave / noautosave\n"
         "keepalive <time>    e.g. 30m (ollama)\n"
+        "context <4-63>      History K (REU)\n"
         "drive <8-30>        Disk drive\n");
 }
 
@@ -262,6 +280,7 @@ static void put_screen_char(unsigned char c) { out_c(c); }
 
 static void show_settings(void)
 {
+    char num2[24];
     char num[6];
     label("Model: ", model);
     label("API: ", api == API_OLLAMA ? "ollama" : "openai");
@@ -273,13 +292,15 @@ static void show_settings(void)
     label("Session: ", session[0] ? session : "(not saved)");
     label("Messages: ", utoa(hist_count(), num, 10));
     out_color(C_DIM);
-    out_s("Memory: ");
+    out_s("History: ");
     out_color(C_TEXT);
     out_u(hist_len);
     out_s(" of ");
     out_u(hist_cap);
     out_s(" bytes");
     out_nl();
+    memory(num2);
+    label("Kept in: ", num2);
     label("Think: ", think[0] ? think : "model default");
     label("Show thinking: ", showthink ? "on" : "off");
     label("Format: ", fmtjson ? "json" : "text");
@@ -411,6 +432,17 @@ static void cmd_set(void)
     } else if (!strcmp(w, "key")) {
         strncpy(apikey, word(0), sizeof apikey - 1);
         info(apikey[0] ? "Set API key." : "Cleared API key.");
+    } else if (!strcmp(w, "context")) {
+        v = word(0);
+        if (!reu_banks) {
+            info("Without an REU the history has 12K.");
+        } else if (atoi(v) >= 4 && atoi(v) <= 63) {
+            context_kb = atoi(v);
+            hist_limit();
+            info(hist_dropped ? "Set; the oldest messages didn't fit." : "Set.");
+        } else {
+            info("Usage: /set context <4-63> (K of REU for the history)");
+        }
     } else if (!strcmp(w, "keepalive")) {
         strncpy(keepalive, word(0), sizeof keepalive - 1);
         info("Set keep-alive.");
@@ -481,13 +513,13 @@ static void replay(void)
             out_color(C_PROMPT);
             out_s("> ");
             out_color(C_USER);
-            for (t = p + 1; (c = hist_peek(t)); ++t) out_c(c);
+            for (t = p + HDR; (c = hist_peek(t)); ++t) out_c(c);
             out_nl();
             out_nl();
             out_color(C_TEXT);
         } else {
             md_reset();
-            for (t = p + 1; (c = hist_peek(t)); ++t) md_c(c);
+            for (t = p + HDR; (c = hist_peek(t)); ++t) md_c(c);
             md_end();
             out_bol();
         }
@@ -632,6 +664,8 @@ int main(void)
         scr_clear();
         setup();
     }
+    if (context_kb < 4 || context_kb > 63) context_kb = 32;
+    hist_limit();
     scr_clear();
     welcome();
     if (!net_init()) {
