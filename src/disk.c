@@ -611,6 +611,7 @@ void mf_list(void)
 
 static void cfg_line(void)
 {
+    unsigned char k;
     char *eq;
     rline[rlen] = 0;
     eq = strchr(rline, '=');
@@ -623,6 +624,11 @@ static void cfg_line(void)
     else if (!strcmp(rline, "key")) strncpy(apikey, eq, sizeof apikey - 1);
     else if (!strcmp(rline, "keepalive")) strncpy(keepalive, eq, sizeof keepalive - 1);
     else if (!strcmp(rline, "context")) context_kb = atoi(eq);
+    else if (!strcmp(rline, "baud")) {
+        for (k = 0; k < 4 && strcmp(eq, bauds[k]); ++k)
+            ;
+        if (k < 4) acia_baud = k;
+    }
     else if (!strcmp(rline, "system")) strncpy(sysmsg, eq, SYS_MAX - 1);
     else if (!strcmp(rline, "pager")) pager = *eq == '1';
     else if (!strcmp(rline, "markdown")) md_on = *eq == '1';
@@ -673,6 +679,7 @@ unsigned char cfg_save(void)
     if (apikey[0]) cfg_put("key", apikey);
     cfg_put("keepalive", keepalive);
     cfg_put("context", utoa(context_kb, num, 10));
+    cfg_put("baud", bauds[acia_baud]);
     cfg_put("pager", pager ? "1" : "0");
     cfg_put("markdown", md_on ? "1" : "0");
     cbm_k_clrch();

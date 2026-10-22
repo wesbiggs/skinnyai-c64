@@ -16,6 +16,7 @@
 
 unsigned char modem_ok;
 unsigned char eth_ok;
+unsigned char baud_fell_back;
 char net_ip[16];
 unsigned char net_stop;
 unsigned char net_done;
@@ -151,7 +152,9 @@ static void hangup(void)
 unsigned char net_init(void)
 {
     int r;
+    unsigned char want = acia_baud;
     acia_init();
+    baud_fell_back = acia_baud != want; /* a Turbo232 rate on a plain SwiftLink */
     put_s("\r");
     r = modem_cmd("AT", SECONDS(2));
     if (r < 0) {                        /* maybe still online from before */

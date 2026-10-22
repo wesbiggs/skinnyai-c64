@@ -8,6 +8,7 @@
 
         .export _acia_init, _acia_done, _acia_get, _acia_put
         .export _acia_count, _acia_flush, _ticks
+        .export _acia_speed, _acia_baud
         .export _charset_init, _reset, nmi_entry
         .export _acia_head := head, _acia_tail := tail, _acia_held := held
 
@@ -15,6 +16,7 @@ ACIA_DATA   = $DE00
 ACIA_STATUS = $DE01
 ACIA_CMD    = $DE02
 ACIA_CTRL   = $DE03
+ACIA_TURBO  = $DE07     ; Turbo232's enhanced speed register
 RING        = $CF00
 NMIVEC      = $0318
 
@@ -22,11 +24,19 @@ CMD_ON      = $09       ; DTR on, receive NMI on, RTS low: send to us
 CMD_HOLD    = $01       ; DTR on, receive NMI on, RTS high: hold
 CMD_OFF     = $02       ; receive NMI off
 CTRL_38400  = $1F       ; 8N1, internal clock, 38400 baud on a SwiftLink
+CTRL_TURBO  = $10       ; 8N1, internal clock, rate from ACIA_TURBO
 
 HIGH_WATER  = 192
 LOW_WATER   = 64
 
+        .data
+_acia_baud: .byte 0     ; 0: 38400, 1: 57600, 2: 115200, 3: 230400
+
+        .rodata
+turbo:  .byte   $02, $01, $00   ; ACIA_TURBO for 57600, 115200, 230400
+
         .bss
+want:   .res 1
 head:   .res 1
 tail:   .res 1
 held:   .res 1
@@ -50,13 +60,56 @@ _acia_init:
         sta     NMIVEC
         lda     #>nmi
         sta     NMIVEC+1
-        lda     #CTRL_38400
-        sta     ACIA_CTRL
+        jsr     _acia_speed
         lda     #CMD_ON
         sta     ACIA_CMD
         lda     ACIA_STATUS
         lda     ACIA_DATA
         cli
+        rts
+
+; unsigned char acia_speed(void): sets the rate acia_baud names, returning
+; false (and going back to 38400) if it can't. Above 38400 that is
+; Turbo232's: the control register's rate bits at 0 to say "use the speed
+; register", then the speed register, which a Turbo232 (and VICE) only
+; accepts in that order; the TeensyROM takes either. A Turbo232 reads the
+; speed register back with bit 2 set (enhanced speed on). A plain SwiftLink
+; has no such register (open bus, or a mirror of another one) and no
+; external clock for those rate bits, so to tell, two different values must
+; each read back exactly, and if not it goes back to 38400.
+_acia_speed:
+        ldx     _acia_baud
+        beq     @std
+        lda     #CTRL_TURBO
+        sta     ACIA_CTRL
+        lda     #3              ; first a value that sets no rate
+        jsr     @try
+        bne     @plain
+        ldx     _acia_baud
+        lda     turbo-1,x
+        jsr     @try
+        bne     @plain
+        lda     #1
+        ldx     #0
+        rts
+@try:   sta     ACIA_TURBO      ; Z set if it reads back with bit 2 added
+        ora     #$04
+        sta     want
+        lda     ACIA_TURBO
+        and     #$07
+        cmp     want
+        rts
+@plain: lda     #0
+        sta     _acia_baud
+        lda     #CTRL_38400
+        sta     ACIA_CTRL
+        lda     #0
+        tax
+        rts
+@std:   lda     #CTRL_38400
+        sta     ACIA_CTRL
+        lda     #1
+        ldx     #0
         rts
 
 ; void acia_done(void)

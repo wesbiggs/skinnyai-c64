@@ -19,6 +19,7 @@ const net = require('net');
 const PORT = Number(process.argv[2] || 25232);
 const BPS = Number(process.env.FAKEMODEM_BPS || 2400);
 const ATC_DELAY = Number(process.env.FAKEMODEM_ATC_DELAY ?? 2000); // ms, as if waiting for DHCP
+const TICK = 10;                        // ms between bursts
 const log = (...a) => process.env.FAKEMODEM_QUIET || console.log('[modem]', ...a);
 
 // ASCII text as the firmware's ToPETSCII sends it.
@@ -32,6 +33,7 @@ const petscii = (s) =>
 
 net.createServer((c64) => {
   log('C64 connected');
+  c64.setNoDelay(true);                 // don't let TCP regroup the paced bytes
   let echo = true;
   let verbose = true;
   let cmd = '';
@@ -49,13 +51,13 @@ net.createServer((c64) => {
       return;
     }
     sending = true;
-    const n = Math.max(1, Math.round(BPS / 100));
+    const n = Math.max(1, Math.round(BPS * TICK / 1000));
     const chunk = Buffer.concat(queue.splice(0)).subarray(0);
     const now = chunk.subarray(0, n);
     const rest = chunk.subarray(n);
     if (rest.length) queue.unshift(rest);
     c64.write(now);
-    setTimeout(pump, 10);
+    setTimeout(pump, TICK);
   };
   const send = (buf) => {
     queue.push(Buffer.isBuffer(buf) ? buf : Buffer.from(buf, 'latin1'));
