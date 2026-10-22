@@ -10,6 +10,7 @@
 //
 // VICE doesn't pass RTS flow control over TCP, so bytes to the C64 are paced
 // (FAKEMODEM_BPS, default 2400 bytes/s) instead of held when it's busy.
+// ATC answers after FAKEMODEM_ATC_DELAY ms (default 2000), as DHCP might.
 //
 //   node tools/fakemodem.js [port]      (default 25232)
 
@@ -17,6 +18,7 @@ const net = require('net');
 
 const PORT = Number(process.argv[2] || 25232);
 const BPS = Number(process.env.FAKEMODEM_BPS || 2400);
+const ATC_DELAY = Number(process.env.FAKEMODEM_ATC_DELAY ?? 2000); // ms, as if waiting for DHCP
 const log = (...a) => process.env.FAKEMODEM_QUIET || console.log('[modem]', ...a);
 
 // ASCII text as the firmware's ToPETSCII sends it.
@@ -119,11 +121,14 @@ net.createServer((c64) => {
       return result('OK', 0);
     }
     if (rest === 'c') {
-      info('MAC Address: BE:0C:64:C0:FF:EE');
-      info('Local IP: 10.0.0.64');
-      info('Subnet Mask: 255.255.255.0');
-      info('Gateway IP: 10.0.0.1');
-      return result('OK', 0);
+      setTimeout(() => {
+        info('MAC Address: BE:0C:64:C0:FF:EE');
+        info('Local IP: 10.0.0.64');
+        info('Subnet Mask: 255.255.255.0');
+        info('Gateway IP: 10.0.0.1');
+        result('OK', 0);
+      }, ATC_DELAY);
+      return;
     }
     if (rest.startsWith('dt')) return dial(rest.slice(2).trim());
     info('unknown command: ' + lc);

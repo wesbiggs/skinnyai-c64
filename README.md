@@ -3,17 +3,19 @@
 A Commodore 64 port of [skinnyai](../skinnyai), the thin chat client for Ollama and OpenAI-compatible servers. It talks plain HTTP straight from the C64 through a SwiftLink-compatible ethernet modem, such as the TeensyROM's. You don't need a bridge program on another computer, just a server on your network.
 
 ```
- SkinnyAI 64                llama3.2:3b
->>> Is 91 prime? One sentence.
+ SkinnyAI                   llama3.2:3b
+> Is 91 prime? One sentence.
 No, 91 is not prime because it is
 divisible by 7 and 13.
 
->>>
+>
 ```
+
+The top line is a green bar with the skinnyai logo (a thin white SKINNY and a bold light green AI, drawn as custom characters) and the model; you type after a yellow `>` in light green.
 
 ## What you need
 
-- A C64 (or C128 in 64 mode) with a **TeensyROM** set to *Special IO: Swift-Turbo/Modem*, with ethernet connected. Any SwiftLink at `$DE00` (NMI) whose modem understands the TeensyROM's `ATC` and `ATDT host:port` commands should work too.
+- A C64 (or C128 in 64 mode) with a **SwiftLink-compatible** cartridge at `$DE00` (NMI) whose modem connects to the network with `ATDT"host:port"`. The **TeensyROM** is the one this was written for: set *Special IO* to *Swift-Turbo/Modem* and connect ethernet. Its `ATC` command starts ethernet, and a modem that doesn't know `ATC` is assumed to be online already, so a WiFi modem along the lines of Zimodem should work too (untested).
 - A disk drive (real, SD2IEC, Pi1541, ...) for settings and saved chats. Without one you can still chat; nothing is saved.
 - A server that speaks **plain HTTP** (the C64 can't do TLS):
   - **Ollama** on your network. By default Ollama only listens on localhost, so start it with `OLLAMA_HOST=0.0.0.0 ollama serve` (or set that in its environment).
@@ -33,7 +35,7 @@ Copy `dist/skinnyai.prg` to the TeensyROM's SD card or USB stick and launch it f
 
 ## First run
 
-With no `skinnyai.cfg` on the disk, it asks for the server's address, its port (11434 for Ollama), the API (`ollama` or `openai`), and a model, then saves them to `skinnyai.cfg`. Next it checks for the modem and runs `ATC` to start ethernet, showing the C64's IP address. Then type at the `>>>` prompt.
+With no `skinnyai.cfg` on the disk, it asks for the server's address, its port (11434 for Ollama), the API (`ollama` or `openai`), and a model, then saves them to `skinnyai.cfg`. Then it shows the settings in a table, quietly checks for the modem and runs `ATC` to start ethernet (only problems are reported; `/show settings` has the C64's IP address), and you type at the `>` prompt.
 
 Change settings with `/set ...` and save them as the defaults with `/config`. The drive is the one the program was loaded from (`/set drive <n>` to change it).
 
@@ -103,18 +105,19 @@ Some things skinnyai does didn't make the trip:
 - **No tools** (web search, page fetching, MCP), no images or file attachments, no encrypted sessions or sync, no SQLite chat files, no profiles (just `skinnyai.cfg`), and no model-suggested titles. Chats are saved only when you `/save` (or with `/set autosave` once a chat has a name).
 - **Memory:** the conversation lives in the 12 KB of RAM under the I/O area and the KERNAL ROM. The whole history is sent with each message, as in skinnyai. When it fills, the oldest exchanges are dropped, and you're told. A system message holds up to 1 KB and a typed message 600 characters. `/show settings` shows how much is used.
 - **Speed:** the C64 handles roughly 2,300 bytes/s of response, measured in VICE. Ollama sends about 120 bytes of JSON per token, so replies appear at about 18 tokens a second. The modem holds the rest (it buffers 320 KB), so nothing is lost while the C64 catches up or the pager waits. OpenAI-style streams are similar.
-- **Text:** replies are shown in ASCII. Accented letters lose their accents, curly quotes, dashes, arrows, ellipses, box drawing, and fractions become their ASCII look-alikes, and emoji are dropped. Markdown is shown as color: headings yellow, `**bold**` white, `code` and code blocks cyan, and thinking grey.
+- **Text:** replies are shown in ASCII. Accented letters lose their accents, curly quotes, dashes, arrows, ellipses, box drawing, and fractions become their ASCII look-alikes, and emoji are dropped. Markdown is shown as color: headings yellow, `**bold**` white, `code` and code blocks cyan, and thinking grey. Tables are drawn with the C64's line-drawing characters in green, with the header row in white. Each column is as wide as it needs to be, narrowed to fit 40 columns, and cells wrap onto more lines. A table holds up to 1 KB of text and 6 columns.
 - **Thinking** (`/set think`) is shown as it streams, between "Thinking..." and "...done thinking.", and isn't kept in the history.
 - `/show license` and `/show template` aren't available (too large), and `/show info` takes a while, since `/api/show` returns many kilobytes.
 
 ## How it works
 
 - `src/acia.s`: the SwiftLink driver. Bytes arrive by NMI into a 256-byte ring at `$CF00`. At 3/4 full the handler raises RTS, so the TeensyROM holds further bytes until the program catches up. It also has `rx_pump`, the assembly loop that moves a response body through the JSON tokenizer, and the character set copy.
-- `src/net.c`: the modem (`ATE0`, `ATV1`, `ATC`, `ATDT host:port`, `NO CARRIER`, `+++` with guard times) and HTTP/1.0: requests with `Content-Length` (the JSON body is generated twice, once to count it), and responses that are plain, `Content-Length`, or chunked.
+- `src/net.c`: the modem (`ATE0`, `ATV1`, `ATC`, `ATDT"host:port"`, `NO CARRIER`, `+++` with guard times) and HTTP/1.0: requests with `Content-Length` (the JSON body is generated twice, once to count it), and responses that are plain, `Content-Length`, or chunked.
 - `src/json.c` + `src/jsonfast.s`: a streaming JSON tokenizer that reports values by key and streams `content` and `thinking` text a character at a time; UTF-8 and `\u` escapes become ASCII.
 - `src/chat.c`: the history in far memory, request bodies for both APIs, the streamed reply, `/list`, `/show info`. `src/far.s` reaches the RAM under I/O and the KERNAL with both switched out; NMIs still arrive through a RAM vector at `$FFFA`.
-- `src/screen.c` (direct screen writes, word wrap, markdown color, pager, keyboard mapping), `src/input.c` (the line editor), `src/disk.c` (Modelfiles, `skinnyai.cfg`, the directory, through the KERNAL), `src/main.c` (settings and commands).
-- Memory: BASIC stub at `$0801`; RAM character set `$0800-$0FFF` (it overwrites the stub after it runs); program `$1000` to about `$B900`; heap and C stack to `$CF00`; receive ring `$CF00-$CFFF`; history `$D000-$FFF7`. Text is ASCII inside the program (`src/ascii.h` makes cc65 leave literals alone) and is converted only for the screen, the keyboard, and disk file names.
+- The title bar's green is seven double-width sprites behind the first text row, so its characters can be white; the logo is seven custom characters. The sprites are turned off while the disk is in use, since their DMA cycles can upset the KERNAL's serial bus timing.
+- `src/screen.c` (direct screen writes, word wrap, markdown color and tables, pager, keyboard mapping), `src/input.c` (the line editor), `src/disk.c` (Modelfiles, `skinnyai.cfg`, the directory, through the KERNAL), `src/main.c` (settings and commands).
+- Memory: BASIC stub at `$0801`; RAM character set `$0800-$0FFF` (it overwrites the stub after it runs); program and its variables `$1000` to about `$C980`; C stack `$CB00-$CEFF`; receive ring `$CF00-$CFFF`; title bar sprite data `$0340` (the cassette buffer); history `$D000-$FFF7`. Text is ASCII inside the program (`src/ascii.h` makes cc65 leave literals alone) and is converted only for the screen, the keyboard, and disk file names.
 
 ## Testing in VICE
 
@@ -124,13 +127,13 @@ No TeensyROM is needed to try it. `tools/fakemodem.js` stands in for the TeensyR
 make vice       # builds, then runs tools/run-vice.sh
 ```
 
-This starts the fake modem and x64sc with a SwiftLink at `$DE00` (NMI, 38400 baud) and a writable copy of the disk image in `test/out/work.d64`. At the setup prompt, give the address of an Ollama server (`127.0.0.1` reaches one on the same machine). VICE doesn't pass RTS flow control over TCP, so the fake modem paces its output instead (`FAKEMODEM_BPS`, default 2400 bytes/s; 3800 is the real line rate).
+This starts the fake modem and x64sc with a SwiftLink at `$DE00` (NMI, 38400 baud) and a writable copy of the disk image in `test/out/work.d64`. At the setup prompt, give the address of an Ollama server (`127.0.0.1` reaches one on the same machine). VICE doesn't pass RTS flow control over TCP, so the fake modem paces its output instead (`FAKEMODEM_BPS`, default 2400 bytes/s; 3800 is the real line rate) and answers `ATC` after `FAKEMODEM_ATC_DELAY` ms (default 2000), as DHCP might.
 
 `tools/mon.py` drives the running emulator through VICE's remote monitor. It's how this was tested:
 
 ```bash
 python3 tools/mon.py type 'Why is the sky blue?\r'
-python3 tools/mon.py wait '>>>' 60
+python3 tools/mon.py wait '> ' 60
 python3 tools/mon.py screen
 python3 tools/mon.py shot test/out/screen.png
 ```

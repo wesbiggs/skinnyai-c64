@@ -1,5 +1,6 @@
 /* SkinnyAI 64: a thin chat client for Ollama and OpenAI-compatible servers,
- * for a Commodore 64 with a TeensyROM (SwiftLink-compatible ethernet modem).
+ * for a Commodore 64 with a SwiftLink-compatible network modem (such as the
+ * TeensyROM's ethernet).
  * The command set follows skinnyai, which follows `ollama run`. */
 #include "ascii.h"
 #include <string.h>
@@ -90,23 +91,20 @@ static void set_host(char *v)
 
 void status_bar(void)
 {
-    static const char title[] = " SkinnyAI 64 ";
+    /* on the green of screen.c's sprites: the logo, and the model in white */
     unsigned char i, n, x;
     for (i = 0; i < 40; ++i) {
-        SCREEN[i] = 0xA0;
-        COLRAM[i] = C_GREEN;
+        SCREEN[i] = ' ';
+        COLRAM[i] = C_WHITE;
     }
-    for (i = 0; title[i]; ++i) {
-        SCREEN[i] = a2s[title[i]] | 0x80;
-        COLRAM[i] = i < 7 ? C_WHITE : C_GREEN;
+    for (i = 0; i < LOGO_CELLS; ++i) {
+        SCREEN[i] = LOGO_CHAR + i;
+        COLRAM[i] = i < LOGO_AI ? C_WHITE : C_USER;
     }
     n = strlen(model);
-    if (n > 25) n = 25;
-    x = 39 - n;
-    for (i = 0; i < n; ++i) {
-        SCREEN[x + i] = a2s[model[i] & 127] | 0x80;
-        COLRAM[x + i] = C_GREEN;
-    }
+    if (n > 32) n = 32;
+    x = 40 - n;
+    for (i = 0; i < n; ++i) SCREEN[x + i] = a2s[model[i] & 127];
 }
 
 static void url(void)
@@ -118,24 +116,39 @@ static void url(void)
     out_s(utoa(port, num, 10));
 }
 
+/* A row of the welcome table, as markdown for screen.c's table drawing. */
+static void row(const char *name, const char *value)
+{
+    md_c('|');
+    while (*name) md_c(*name++);
+    md_c('|');
+    while (*value) md_c(*value++);
+    md_c('|');
+    md_c('\n');
+}
+
 static void welcome(void)
 {
-    char num[4];
+    char num[6], hostport[64];
+    unsigned char md = md_on;
     status_bar();
     out_bol();
-    out_color(C_GREEN);
-    out_s("SkinnyAI 64 v" VERSION);
-    out_nl();
-    label("Model: ", model[0] ? model : "(none: /set model)");
-    if (api == API_OPENAI) label("API: ", "OpenAI-compatible");
-    out_color(C_DIM);
-    out_s("Host: ");
     out_color(C_TEXT);
-    url();
-    out_nl();
-    if (api == API_OLLAMA && keepalive[0]) label("Keep-alive: ", keepalive);
-    label("Drive: ", utoa(drive, num, 10));
-    out_nl();
+    md_on = 1;
+    md_reset();
+    row("SkinnyAI 64", "v" VERSION);
+    row("-", "-");
+    row("Model", model[0] ? model : "(none: /set model)");
+    if (api == API_OPENAI) row("API", "OpenAI-compatible");
+    strcpy(hostport, "http://");
+    strcat(hostport, host);
+    strcat(hostport, ":");
+    strcat(hostport, utoa(port, num, 10));
+    row("Host", hostport);
+    if (api == API_OLLAMA && keepalive[0]) row("Keep-alive", keepalive);
+    row("Drive", utoa(drive, num, 10));
+    md_end();
+    md_on = md;
     out_color(C_DIM);
     out_s("Type /help for commands. RETURN sends; SHIFT+RETURN adds a line.");
     out_nl();
@@ -277,7 +290,7 @@ static void show_settings(void)
     if (api == API_OLLAMA) label("Keep-alive: ", keepalive[0] ? keepalive : "server default");
     label("API key: ", apikey[0] ? "set" : "none");
     label("Drive: ", utoa(drive, num, 10));
-    label("Modem: ", modem_ok ? "ready" : "not found");
+    label("Modem: ", !modem_ok ? "not found" : !eth_ok ? "network not started" : net_ip[0] ? net_ip : "ready");
 }
 
 static void cmd_show(void)
@@ -465,9 +478,11 @@ static void replay(void)
     for (p = t; p < hist_len; p = hist_next(p)) {
         out_bol();
         if (hist_peek(p) == 'u') {
+            out_color(C_PROMPT);
+            out_s("> ");
             out_color(C_USER);
-            out_s(">>> ");
             for (t = p + 1; (c = hist_peek(t)); ++t) out_c(c);
+            out_nl();
             out_nl();
             out_color(C_TEXT);
         } else {
@@ -620,12 +635,14 @@ int main(void)
     scr_clear();
     welcome();
     if (!net_init()) {
-        err("No modem answered. Set the TeensyROM's Special IO to Swift-Turbo/Modem, then restart. (Saved chats still work.)");
+        err("No modem answered on the SwiftLink at $DE00 (on a TeensyROM: Special IO, Swift-Turbo/Modem). Restart once it's on; saved chats still work.");
+    } else if (!eth_ok) {
+        err("The network didn't start (ATC); check the cable and the modem's network settings. Messages will try again.");
     }
     out_nl();
 
     for (;;) {
-        if (!input_line(">>> ", "", INPUT_MAX, 1)) continue;
+        if (!input_line("> ", "", INPUT_MAX, 1)) continue;
         if (ibuf[0] == '/' && ibuf[1] != '/') {
             if (!command(ibuf)) break;
         } else {

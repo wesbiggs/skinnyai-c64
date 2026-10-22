@@ -48,11 +48,17 @@ void status_bar(void);
 #define C_BOLD   1      /* white */
 #define C_HEAD   7      /* yellow */
 #define C_CODE   3      /* cyan */
-#define C_USER   13     /* light green */
+#define C_USER   13     /* light green: what you type */
+#define C_PROMPT 7      /* yellow */
+#define C_BORDER 5      /* green: table lines */
 #define C_INFO   14     /* light blue */
 #define C_DIM    12     /* grey */
 #define C_ERR    10     /* light red */
 #define C_GREEN  5
+
+#define LOGO_CHAR  0x61 /* the title's 7 characters, from this screen code */
+#define LOGO_CELLS 7
+#define LOGO_AI    4    /* where AI starts */
 
 #define SCREEN ((unsigned char *)0x0400)
 #define COLRAM ((unsigned char *)0xD800)
@@ -109,6 +115,8 @@ unsigned char key_ends(const char *k);
 #define NET_DROPPED -5
 
 extern unsigned char modem_ok;
+extern unsigned char eth_ok;            /* ATC succeeded */
+extern char net_ip[16];                 /* the C64's address, from ATC */
 extern unsigned char net_stop;
 extern unsigned char net_done;
 extern unsigned char net_spin;          /* show a spinner while waiting */

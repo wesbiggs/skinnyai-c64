@@ -29,6 +29,48 @@ static const unsigned char glyphs[] = {
     0x7E, 0x00, 0x00, 0x76, 0xDC, 0x00, 0x00, 0x00, 0x00,   /* ~ */
 };
 
+/* The title, drawn like the skinnyai icon: a thin SKINNY (5 pixels wide
+ * and 7 high, one pixel apart) and a bold AI (3-pixel strokes), as 7 characters put in
+ * place of block graphics that are otherwise unused. */
+static const unsigned char logo[LOGO_CELLS * 8] = {
+    0x7A, 0x82, 0x82, 0x73, 0x0A, 0x0A, 0xF2, 0x00,
+    0x2A, 0x4B, 0x8B, 0x0A, 0x8A, 0x4A, 0x2A, 0x00,
+    0x28, 0x2C, 0x2C, 0xAA, 0x69, 0x69, 0x28, 0x00,
+    0xA2, 0xA2, 0x94, 0x88, 0x88, 0x88, 0x88, 0x00,
+    0x07, 0x0F, 0x0D, 0x1D, 0x3F, 0x38, 0x70, 0x00,     /* A, a triangle */
+    0x03, 0x83, 0x83, 0xC3, 0xE3, 0xE3, 0x73, 0x00,     /* A, and I */
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00,     /* I */
+};
+
+/* The title bar's green: seven sprites, stretched to double width and
+ * solid for their top 8 lines, across the first text row and behind its
+ * characters, so its text can be white (and light green). Their data is
+ * in the cassette buffer. */
+#define SPRITE_DATA ((unsigned char *)0x0340)
+#define SPRITE_PTRS ((unsigned char *)0x07F8)
+#define VICREG(n) (*(unsigned char *)(0xD000u + (n)))   /* constant n only: */
+/* cc65 -Oirs miscompiles writes through a VIC base pointer after a loop */
+
+static void title_bar(void)
+{
+    static const unsigned char xlo[7] = { 24, 72, 120, 168, 216, 8, 56 };
+    unsigned char i;
+    memset(SPRITE_DATA, 0, 64);
+    memset(SPRITE_DATA, 0xFF, 24);
+    for (i = 0; i < 7; ++i) {
+        SPRITE_PTRS[i] = 0x0340 / 64;
+        ((unsigned char *)0xD000u)[i * 2] = xlo[i];             /* x: 24 + 48i */
+        ((unsigned char *)0xD001u)[i * 2] = 50;                 /* the first text row */
+        ((unsigned char *)0xD027u)[i] = C_GREEN;
+    }
+    VICREG(0x10) = 0x60;                                /* x > 255: sprites 5, 6 */
+    VICREG(0x1C) = 0;                                   /* hires */
+    VICREG(0x17) = 0;
+    VICREG(0x1D) = 0x7F;                                /* double width */
+    VICREG(0x1B) = 0x7F;                                /* behind characters */
+    VICREG(0x15) = 0x7F;                                /* on */
+}
+
 static unsigned char to_screen(unsigned char c)
 {
     if (c >= 0x61 && c <= 0x7A) return c - 0x60;          /* a-z */
@@ -60,9 +102,11 @@ void scr_init(void)
             p[j + 1024] = g[j + 1] ^ 0xFF;                  /* reverse video */
         }
     }
+    memcpy((unsigned char *)0x0800 + LOGO_CHAR * 8, logo, sizeof logo);
     for (i = 0; i < 128; ++i) a2s[i] = to_screen(i);
-    *(unsigned char *)0xD020 = C_BLACK;
+    *(unsigned char *)0xD020 = C_GREEN;
     *(unsigned char *)0xD021 = C_BLACK;
+    title_bar();
     scr_clear();
 }
 
@@ -206,6 +250,219 @@ void out_line(unsigned char color, const char *s)
     curcolor = old;
 }
 
+/* ---- markdown tables ----
+ * A table can't be drawn until its column widths are known, so its lines
+ * (those starting with |) are collected, then drawn with the box-drawing
+ * characters: columns as wide as their widest cell, narrowed to fit 40
+ * columns, with cells wrapped onto more lines as needed. */
+
+#define TBUF     1024
+#define MAXCOLS  6      /* more can't fit in 40 columns anyway */
+#define CELLMAX  100
+
+#define BOX_H    0x40   /* the screen codes of the line-drawing characters */
+#define BOX_V    0x5D
+#define BOX_TL   0x70
+#define BOX_TR   0x6E
+#define BOX_BL   0x6D
+#define BOX_BR   0x7D
+#define BOX_LT   0x6B   /* ├ */
+#define BOX_RT   0x73   /* ┤ */
+#define BOX_TT   0x72   /* ┬ */
+#define BOX_BT   0x71   /* ┴ */
+#define BOX_X    0x5B   /* ┼ */
+
+static char tbuf[TBUF];
+static unsigned int tlen;
+static unsigned char md_table, md_tnl;
+static char cell[MAXCOLS][CELLMAX];
+static unsigned char clen[MAXCOLS], width[MAXCOLS], minw[MAXCOLS], ncols;
+
+static void table_add(char c)
+{
+    if (tlen < TBUF - 1) tbuf[tlen++] = c;
+}
+
+/* Splits the table line at line into cell[] (with ** and ` removed and
+ * spaces trimmed); returns the number of cells, and the line's end. */
+static unsigned char split_row(const char *line, const char **end)
+{
+    unsigned char n = 0, k;
+    const char *p = line;
+    if (*p == '|') ++p;
+    while (*p && *p != '\n') {
+        k = 0;
+        while (*p == ' ') ++p;
+        while (*p && *p != '\n' && *p != '|') {
+            if (*p == '\\' && p[1] == '|') ++p;
+            else if (*p == '`' || (*p == '*' && p[1] == '*')) {
+                p += *p == '*' ? 2 : 1;
+                continue;
+            }
+            if (n < MAXCOLS && k < CELLMAX - 1) cell[n][k++] = *p;
+            ++p;
+        }
+        while (k && cell[n < MAXCOLS ? n : 0][k - 1] == ' ') --k;
+        if (n < MAXCOLS) {
+            cell[n][k] = 0;
+            clen[n] = k;
+        }
+        ++n;
+        if (*p == '|') ++p;
+        if (*p == '\n' || !*p) break;   /* a closing | ends the row */
+    }
+    *end = *p == '\n' ? p + 1 : p;
+    return n < MAXCOLS ? n : MAXCOLS;
+}
+
+/* The longest word in cell i (up to 12), split at spaces and after -. */
+static unsigned char longest_word(unsigned char i)
+{
+    unsigned char k, run = 0, best = 0;
+    for (k = 0; k < clen[i]; ++k) {
+        if (cell[i][k] == ' ') {
+            run = 0;
+            continue;
+        }
+        if (++run > best) best = run;
+        if (cell[i][k] == '-') run = 0;
+    }
+    return best > 12 ? 12 : best;
+}
+
+/* A |---|:--:| line: only -, :, and spaces, with a - in each cell. */
+static unsigned char is_rule(unsigned char n)
+{
+    unsigned char i;
+    const char *p;
+    for (i = 0; i < n; ++i) {
+        if (!strchr(cell[i], '-')) return 0;
+        for (p = cell[i]; *p; ++p) {
+            if (*p != '-' && *p != ':' && *p != ' ') return 0;
+        }
+    }
+    return n != 0;
+}
+
+static void put_box(unsigned char sc)
+{
+    put_screen(sc, C_BORDER);
+}
+
+static void rule_line(unsigned char left, unsigned char mid, unsigned char right)
+{
+    unsigned char i, j;
+    put_box(left);
+    for (i = 0; i < ncols; ++i) {
+        for (j = 0; j < width[i]; ++j) put_box(BOX_H);
+        put_box(i + 1 < ncols ? mid : right);
+    }
+    newline();
+}
+
+/* The start and length of the k-th line of text wrapped at width w. */
+static unsigned char wrap_line(const char *s, unsigned char len, unsigned char w,
+                               unsigned char k, unsigned char *start)
+{
+    unsigned char p = 0, n, b;
+    for (;;) {
+        while (p < len && s[p] == ' ') ++p;
+        n = len - p;
+        if (n > w) {                    /* break at a space or after a - */
+            for (b = w; b && s[p + b] != ' ' && s[p + b - 1] != '-'; --b)
+                ;
+            n = b ? b : w;
+        }
+        if (!k--) {
+            *start = p;
+            return p < len ? n : 0;
+        }
+        p += n;
+    }
+}
+
+static unsigned char cell_lines(unsigned char i)
+{
+    unsigned char k = 0, st;
+    while (wrap_line(cell[i], clen[i], width[i], k, &st)) ++k;
+    return k ? k : 1;
+}
+
+static void row_lines(unsigned char header)
+{
+    unsigned char i, j, k, h = 1, n, st;
+    for (i = 0; i < ncols; ++i) {
+        n = cell_lines(i);
+        if (n > h) h = n;
+    }
+    for (k = 0; k < h; ++k) {
+        put_box(BOX_V);
+        for (i = 0; i < ncols; ++i) {
+            n = wrap_line(cell[i], clen[i], width[i], k, &st);
+            for (j = 0; j < width[i]; ++j) {
+                put_screen(j < n ? a2s[cell[i][st + j] & 127] : ' ', header ? C_BOLD : curcolor);
+            }
+            put_box(BOX_V);
+        }
+        newline();
+    }
+}
+
+static void table_flush(void)
+{
+    const char *p, *next;
+    unsigned char i, n, total, widest, rows = 0, rule_after = 0;
+
+    md_table = md_tnl = 0;
+    tbuf[tlen] = 0;
+    /* the number of columns and their natural widths */
+    ncols = 0;
+    memset(width, 1, sizeof width);
+    memset(minw, 1, sizeof minw);
+    for (p = tbuf; *p; p = next) {
+        n = split_row(p, &next);
+        if (is_rule(n)) {
+            if (rows == 1) rule_after = 1;
+            continue;
+        }
+        ++rows;
+        if (n > ncols) ncols = n;
+        for (i = 0; i < n; ++i) {
+            if (clen[i] > width[i]) width[i] = clen[i];
+            total = longest_word(i);
+            if (total > minw[i]) minw[i] = total;
+        }
+    }
+    if (!ncols) return;
+    /* narrow the widest columns until the table fits: first no narrower
+     * than their longest words, then down to 3 if it must */
+    for (rows = 0; rows < 2; ++rows) {
+        for (;;) {
+            total = ncols + 1;
+            widest = 255;
+            for (i = 0; i < ncols; ++i) {
+                total += width[i];
+                if (width[i] > (rows ? 3 : minw[i]) && (widest == 255 || width[i] > width[widest])) widest = i;
+            }
+            if (total <= 40 || widest == 255) break;
+            --width[widest];
+        }
+    }
+
+    out_bol();
+    rule_line(BOX_TL, BOX_TT, BOX_TR);
+    rows = 0;
+    for (p = tbuf; *p; p = next) {
+        n = split_row(p, &next);
+        if (is_rule(n)) continue;
+        for (i = n; i < ncols; ++i) clen[i] = cell[i][0] = 0;
+        if (rows == 1 && rule_after) rule_line(BOX_LT, BOX_X, BOX_RT);
+        row_lines(rows == 0 && rule_after);
+        ++rows;
+    }
+    rule_line(BOX_BL, BOX_BT, BOX_BR);
+}
+
 /* ---- markdown, a character at a time ---- */
 
 static unsigned char md_ls, md_stars, md_ticks, md_hash;
@@ -214,6 +471,7 @@ static unsigned char md_bold, md_code, md_block, md_head, md_skip;
 void md_reset(void)
 {
     md_ls = 1;
+    md_table = md_tnl = 0;
     md_stars = md_ticks = md_hash = 0;
     md_bold = md_code = md_block = md_head = md_skip = 0;
 }
@@ -237,6 +495,27 @@ void md_c(unsigned char c)
 {
     if (!md_on) {
         out_cc(c, curcolor);
+        return;
+    }
+    if (md_table) {                     /* collecting a table */
+        if (!md_tnl) {
+            table_add(c);
+            if (c == '\n') md_tnl = 1;
+            return;
+        }
+        if (c == '|') {                 /* another row */
+            md_tnl = 0;
+            table_add(c);
+            return;
+        }
+        table_flush();
+        md_ls = 1;
+    }
+    if (md_ls && c == '|' && !md_block) {
+        md_table = 1;
+        md_tnl = 0;
+        tlen = 0;
+        table_add(c);
         return;
     }
     if (md_skip) {                      /* the rest of a ``` fence line */
@@ -298,6 +577,7 @@ void md_c(unsigned char c)
 
 void md_end(void)
 {
+    if (md_table) table_flush();
     md_pending();
     out_flush();
 }

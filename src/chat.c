@@ -337,6 +337,7 @@ void chat_turn(const char *text)
     pg_lines = 0;
     hist_dropped = 0;
     out_color(C_TEXT);
+    out_nl();                           /* a blank row before the reply */
     net_spin = 1;
     t_start = ticks();
 

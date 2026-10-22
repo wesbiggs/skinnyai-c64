@@ -1,4 +1,5 @@
-/* The TeensyROM's ethernet "modem" and HTTP/1.0 over it.
+/* A SwiftLink's network "modem" (the TeensyROM's ethernet, or a WiFi
+ * modem that takes ATDT"host:port") and HTTP/1.0 over it.
  *
  * In command mode the modem takes AT commands (ATC brings up ethernet,
  * ATDT host:port opens a TCP connection) and answers with result words
@@ -14,6 +15,8 @@
 #include "skinny.h"
 
 unsigned char modem_ok;
+unsigned char eth_ok;
+char net_ip[16];
 unsigned char net_stop;
 unsigned char net_done;
 unsigned char net_spin;
@@ -63,6 +66,7 @@ static unsigned char read_line(unsigned int timeout)
         c = acia_get();
         if (c < 0) {
             if (ticks() - t0 > timeout || stop_pressed()) return 0;
+            if (net_spin) spin_tick();
             continue;
         }
         if (c == '\r') {
@@ -92,9 +96,9 @@ static int result_of(void)
     return -1;
 }
 
-/* Sends an AT command and waits for its result; other lines (the modem's
- * own messages) are shown when show is set. -1 on timeout. */
-static int modem_cmd(const char *cmd, unsigned int timeout, unsigned char show)
+/* Sends an AT command and waits for its result, -1 on timeout. Of the
+ * modem's own messages, ATC's "Local IP: ..." is kept in net_ip. */
+static int modem_cmd(const char *cmd, unsigned int timeout)
 {
     int r;
     unsigned char i;
@@ -103,10 +107,8 @@ static int modem_cmd(const char *cmd, unsigned int timeout, unsigned char show)
     while (read_line(timeout)) {
         r = result_of();
         if (r >= 0) return r;
-        if (show && strncmp(mline, cmd, 3) != 0) {
-            for (i = 0; i < mlen; ++i) mline[i] = p2a(mline[i]) ? p2a(mline[i]) : ' ';
-            out_line(C_DIM, mline);
-        }
+        for (i = 0; i < mlen; ++i) mline[i] = p2a(mline[i]) ? p2a(mline[i]) : ' ';
+        if (strncmp(mline, "Local IP: ", 10) == 0) strncpy(net_ip, mline + 10, sizeof net_ip - 1);
     }
     return -1;
 }
@@ -151,20 +153,21 @@ unsigned char net_init(void)
     int r;
     acia_init();
     put_s("\r");
-    r = modem_cmd("AT", SECONDS(2), 0);
+    r = modem_cmd("AT", SECONDS(2));
     if (r < 0) {                        /* maybe still online from before */
         hangup();
-        r = modem_cmd("AT", SECONDS(2), 0);
+        r = modem_cmd("AT", SECONDS(2));
     }
     if (r < 0) return modem_ok = 0;
-    modem_cmd("ATE0", SECONDS(2), 0);
-    modem_cmd("ATV1", SECONDS(2), 0);
-    out_line(C_DIM, "Starting ethernet (ATC)...");
-    r = modem_cmd("ATC", SECONDS(30), 1);
+    modem_cmd("ATE0", SECONDS(2));
+    modem_cmd("ATV1", SECONDS(2));
+    net_spin = 1;
+    /* start the TeensyROM's ethernet; other modems don't know ATC (ERROR) */
+    r = modem_cmd("ATC", SECONDS(30));
+    eth_ok = r == R_OK || r == R_ERROR;
+    net_spin = 0;
+    spin_clear();
     modem_ok = 1;
-    if (r != R_OK) {
-        out_line(C_ERR, "Ethernet didn't start; check the cable and the TeensyROM's network settings.");
-    }
     return 1;
 }
 
@@ -178,15 +181,19 @@ static unsigned char dial(void)
     acia_flush();
     put_s("\r");
     drain(15);
-    for (i = 0; (r = modem_cmd("AT", SECONDS(2), 0)) != R_OK && i < 2; ++i) {
+    for (i = 0; (r = modem_cmd("AT", SECONDS(2))) != R_OK && i < 2; ++i) {
         if (r < 0) hangup();
     }
-    strcpy(cmd, "ATDT");
+    strcpy(cmd, "ATDT\"");              /* quoted, as WiFi modems want */
     strcat(cmd, host);
     strcat(cmd, ":");
     strcat(cmd, utoa(port, num, 10));
-    r = modem_cmd(cmd, SECONDS(30), 0);
-    if (r == R_CONNECT) return 1;
+    strcat(cmd, "\"");
+    r = modem_cmd(cmd, SECONDS(30));
+    if (r == R_CONNECT) {
+        eth_ok = 1;                     /* the network works, whatever ATC said */
+        return 1;
+    }
     switch (r) {
     case R_NOANSWER:
         strcpy(net_err, "The server didn't answer. Is it running, and listening on the network (OLLAMA_HOST=0.0.0.0)?");
@@ -392,7 +399,7 @@ int http_request(const char *method, const char *path, void (*body)(void))
     net_stop = 0;
     net_done = 0;
     if (!modem_ok) {
-        strcpy(net_err, "No modem: set the TeensyROM's Special IO to Swift-Turbo/Modem.");
+        strcpy(net_err, "No modem: is the SwiftLink (or TeensyROM Swift-Turbo/Modem) on?");
         return NET_NODIAL;
     }
     if (!dial()) return NET_NODIAL;

@@ -11,7 +11,7 @@ static unsigned int ilen, icur, imax;
 static unsigned char srow, scol;
 
 /* Earlier lines, oldest first, each ending in a 0. */
-#define RECALL_SIZE 1024
+#define RECALL_SIZE 896
 static char recall[RECALL_SIZE];
 static unsigned int recall_len;
 
@@ -88,9 +88,10 @@ unsigned int input_line(const char *prompt, const char *initial, unsigned int ma
     static char draft[INPUT_MAX + 1];
 
     out_bol();
-    out_color(C_USER);
+    out_color(C_PROMPT);
     out_s(prompt);
     out_flush();
+    out_color(C_USER);
     if (ccol >= 40) {
         scroll_up();
         ccol = 0;
@@ -112,7 +113,9 @@ unsigned int input_line(const char *prompt, const char *initial, unsigned int ma
             memset(SCREEN + srow * 40, ' ', (25 - srow) * 40);
             crow = srow;
             ccol = 0;
+            out_color(C_PROMPT);
             out_s(prompt);
+            out_color(C_USER);
             for (k = 0; k < ilen; ++k) out_c(ibuf[k]);
             out_color(C_TEXT);
             out_nl();

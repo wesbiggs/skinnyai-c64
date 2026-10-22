@@ -32,11 +32,21 @@ static const char *pet(const char *prefix, const char *name, const char *suffix)
 
 static unsigned char cmd_open;          /* channel 15 is open */
 
+/* The title bar's sprites take cycles that the KERNAL's serial bus
+ * timing can't spare, so they're off while the disk is in use. */
+#define SPRITES_ON (*(unsigned char *)0xD015)
+
+static void disk_begin(void)
+{
+    SPRITES_ON = 0;
+}
+
 static unsigned char no_drive(void)
 {
     strcpy(dstat, "Drive ");
     utoa(drive, dstat + 6, 10);
     strcat(dstat, " isn't there (/set drive <n>).");
+    SPRITES_ON = 0x7F;                  /* the operation ends here */
     return 255;
 }
 
@@ -46,6 +56,7 @@ static void disk_done(void)
 {
     if (cmd_open) cbm_close(LFNC);
     cmd_open = 0;
+    SPRITES_ON = 0x7F;
 }
 
 /* Reads the drive's status into dstat; returns its number (0 = OK). */
@@ -53,6 +64,7 @@ static unsigned char status(void)
 {
     unsigned char n = 0, c, st;
     dstat[0] = 0;
+    disk_begin();
     if (!cmd_open) {
         if (cbm_open(LFNC, drive, 15, "")) {
             cbm_close(LFNC);
@@ -82,6 +94,7 @@ static unsigned char status(void)
 static unsigned char command(const char *cmd)
 {
     disk_done();
+    disk_begin();
     if (cbm_open(LFNC, drive, 15, cmd)) {
         cbm_close(LFNC);
         return no_drive();
