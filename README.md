@@ -1,6 +1,8 @@
 # SkinnyAI 64
 
-A Commodore 64 port of [skinnyai](../skinnyai), the thin chat client for Ollama and OpenAI-compatible servers. It talks plain HTTP straight from the C64 through a SwiftLink-compatible ethernet modem, such as the TeensyROM's. You don't need a bridge program on another computer, just a server on your network.
+[![Tests](https://github.com/wesbiggs/skinnyai-c64/actions/workflows/test.yml/badge.svg)](https://github.com/wesbiggs/skinnyai-c64/actions/workflows/test.yml)
+
+A Commodore 64 port of [skinnyai](https://github.com/wesbiggs/skinnyai), the thin chat client for Ollama and OpenAI-compatible servers. It talks plain HTTP straight from the C64 through a SwiftLink-compatible ethernet modem, such as the TeensyROM's. You don't need a bridge program on another computer, just a server on your network.
 
 ```
  SkinnyAI                   llama3.2:3b
@@ -141,10 +143,18 @@ python3 tools/mon.py screen
 python3 tools/mon.py shot test/out/screen.png
 ```
 
+### Automated tests
+
+`make test` runs the tests in [`test/run.py`](test/run.py), which need VICE (`x64sc`, `c1541`), Node, and Python 3. Each test boots the disk image in x64sc with the fake modem, which dials `test/mock-server.js`, a scripted Ollama and OpenAI-compatible server that logs every request. The tests type through the remote monitor, read the screen, check the requests' JSON, and afterwards read the saved files off the disk image. They cover first-run setup, chatting over both APIs (the history sent back, system messages, parameters, thinking, stats, a chunked UTF-8 reply, server errors), `/list`, `/show`, markdown, the pager, saving and loading chats, `/config`, an REU, and a C64 with no SwiftLink. `test/run.py openai` runs only the tests whose names contain `openai`. A failed test leaves its screen (`screen.txt` and `screen.png`), logs, and disk image in `test/out/<test>/`. Set `VICE_ARGS=-minimized` to keep the emulator windows out of the way.
+
+GitHub Actions runs them on every push and pull request ([`.github/workflows/test.yml`](.github/workflows/test.yml)), with VICE built from source with its headless UI.
+
+### By hand
+
 `test/chunked-server.js` serves a deliberately awkward chunked response, with chunk extensions, UTF-8, `\u` escapes, and emoji, for the HTTP and text paths. `make CFLAGS="-t c64 -Ors --static-locals -DHIST_TOP=0xD400u"` builds with 1 KB of history, for testing what happens when memory fills. For an REU, add VICE's options: `tools/run-vice.sh -reu -reusize 512`. For the Turbo232 rates, `-acia1mode 2`. Only 57600 can be tested this way: VICE runs a frame's worth of cycles at a time, so bytes that arrive between frames reach the C64 back to back at the programmed rate, and with no flow control in VICE's ACIA, 115200 and 230400 (85 and 43 cycles a byte, less than an NMI takes) overrun. A TeensyROM hands over each byte only once the last was read, so it can't overrun that way.
 
 Everything here was checked in VICE 3.10 against Ollama: both APIs, streaming, thinking, the pager, RUN/STOP, `/list`, `/show info`, save and load, errors, full memory, 57600 baud through VICE's Turbo232, and VICE's emulated 512 KB REU (a 19 KB chat loaded, sent, and remembered; `/set context` dropping old turns). It has **not yet been run on a real TeensyROM**. The modem behavior comes from reading the TeensyROM firmware source (`Swift_ATcommands.c`, `IOH_Swiftlink.c`), so that's the part most likely to need adjusting.
 
 ## License
 
-Apache-2.0, like skinnyai.
+[Apache-2.0](LICENSE), like skinnyai.

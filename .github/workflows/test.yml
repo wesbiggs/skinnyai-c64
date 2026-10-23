@@ -1,0 +1,71 @@
+# Builds SkinnyAI 64 and runs test/run.py in VICE.
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  VICE_VERSION: "3.10"
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cc65 and VICE's build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cc65 build-essential pkg-config flex bison xa65 dos2unix file zlib1g-dev libcurl4-openssl-dev
+
+      # Debian's vice package has no ROMs, so VICE is built from source,
+      # with its headless UI, and cached.
+      - name: Cache VICE
+        id: vice-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/vice
+          key: vice-${{ env.VICE_VERSION }}-headless-logfix-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build VICE
+        if: steps.vice-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o vice.tar.gz "https://sourceforge.net/projects/vice-emu/files/releases/vice-${VICE_VERSION}.tar.gz/download"
+          tar xzf vice.tar.gz
+          cd "vice-${VICE_VERSION}"
+          # VICE 3.10 crashes at startup when stdout isn't a terminal: its
+          # logger then uses the color-stripped text, which it only makes
+          # when logging to a file or without colors. Make it always.
+          sed -i 's/^    if ((log_to_file) || (!log_colorize)) {$/    {/' src/log.c
+          if grep -q 'if ((log_to_file) || (!log_colorize))' src/log.c; then
+            echo "::error::the src/log.c patch didn't apply"; exit 1
+          fi
+          ./configure --prefix=/opt/vice --enable-headlessui --disable-pdf-docs --disable-html-docs \
+            --without-pulse --without-alsa --without-png --without-gif --disable-ffmpeg
+          make -j"$(nproc)"
+          sudo make install
+
+      - name: Put VICE on the path
+        run: echo /opt/vice/bin >> "$GITHUB_PATH"
+
+      - name: Build
+        run: make
+
+      - name: Test
+        run: make test
+        env:
+          TEST_TIMEOUT_SCALE: "2"
+
+      - name: Keep the failed tests' screens and logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-out
+          path: test/out/
+          if-no-files-found: ignore

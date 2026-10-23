@@ -20,7 +20,11 @@ $(DIST)/skinnyai.d64: $(DIST)/skinnyai.prg
 vice: all
 	tools/run-vice.sh
 
+# Runs the tests in VICE (see test/run.py).
+test: all
+	test/run.py
+
 clean:
 	rm -rf $(DIST) src/*.o
 
-.PHONY: all vice clean
+.PHONY: all vice test clean

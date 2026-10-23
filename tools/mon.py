@@ -66,6 +66,25 @@ class Monitor:
         return data[:want]
 
 
+_monitor = None
+
+
+def monitor():
+    """The connection to VICE, opened once and kept. VICE can stall writing
+    to a connection that has gone away, so one is reused, not one a read."""
+    global _monitor
+    if _monitor is None:
+        _monitor = Monitor()
+    return _monitor
+
+
+def disconnect():
+    global _monitor
+    if _monitor is not None:
+        _monitor.s.close()
+        _monitor = None
+
+
 def screen_code_to_ascii(c):
     c &= 0x7F
     if c == 0: return '@'
@@ -146,11 +165,11 @@ def petscii(text):
 def type_text(text):
     codes = petscii(text)
     while codes:
-        m = Monitor()
+        m = monitor()
         while m.read(0xC6, 0xC6)[0] != 0:
             m.resume()
             time.sleep(0.2)
-            m = Monitor()
+            m = monitor()
         chunk, codes = codes[:8], codes[8:]
         m.cmd('> 0277 ' + ' '.join('%02x' % c for c in chunk))
         m.cmd('> 00c6 %02x' % len(chunk))
@@ -161,7 +180,7 @@ def type_text(text):
 def main():
     op = sys.argv[1]
     if op == 'screen':
-        m = Monitor()
+        m = monitor()
         print(screen(m))
         m.resume()
     elif op == 'type':
@@ -170,7 +189,7 @@ def main():
         want = sys.argv[2]
         limit = time.time() + float(sys.argv[3] if len(sys.argv) > 3 else 30)
         while True:
-            m = Monitor()
+            m = monitor()
             s = screen(m)
             m.resume()
             if want in s:
@@ -182,13 +201,13 @@ def main():
                 sys.exit(1)
             time.sleep(0.5)
     elif op == 'peek':
-        m = Monitor()
+        m = monitor()
         a = int(sys.argv[2], 16)
         b = int(sys.argv[3], 16) if len(sys.argv) > 3 else a
         print(' '.join('%02x' % x for x in m.read(a, b)))
         m.resume()
     elif op == 'shot':
-        m = Monitor()
+        m = monitor()
         chars = m.read(0x0800, 0x0FFF)
         scr = m.read(0x0400, 0x07E7)
         col = m.read(0xD800, 0xDBE7)
@@ -196,10 +215,10 @@ def main():
         m.resume()
         write_png(sys.argv[2], render(chars, scr, col, bg))
     elif op == 'quit':
-        m = Monitor()
+        m = monitor()
         m.s.sendall(b'quit\n')
     elif op == 'raw':
-        m = Monitor()
+        m = monitor()
         print(m.cmd(sys.argv[2]))
         m.resume()
 
