@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install cc65 and VICE's build tools
         run: |
@@ -28,7 +28,7 @@ jobs:
       # with its headless UI, and cached.
       - name: Cache VICE
         id: vice-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /opt/vice
           key: vice-${{ env.VICE_VERSION }}-headless-logfix-${{ runner.os }}-${{ runner.arch }}
@@ -64,7 +64,7 @@ jobs:
 
       - name: Keep the failed tests' screens and logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-out
           path: test/out/
