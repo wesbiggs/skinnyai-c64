@@ -7,7 +7,7 @@
 /* ---- acia.s ---- */
 void __fastcall__ acia_init(void);
 unsigned char __fastcall__ acia_speed(void);
-extern unsigned char acia_baud;         /* 0: 38400, 1: 57600, 2: 115200, 3: 230400 */
+extern unsigned char acia_baud;         /* 0: 38400, 1: 57600 */
 void __fastcall__ acia_done(void);
 int __fastcall__ acia_get(void);
 void __fastcall__ acia_put(unsigned char c);
@@ -41,7 +41,7 @@ extern char session[14];        /* name of the saved chat, "" if none */
 extern unsigned char dirty;     /* messages since it was saved */
 
 void set_param(const char *name, const char *value);
-extern const char *const bauds[4];
+extern const char *const bauds[2];
 void status_bar(void);
 
 /* ---- screen.c ---- */

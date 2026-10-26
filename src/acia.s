@@ -30,10 +30,10 @@ HIGH_WATER  = 192
 LOW_WATER   = 64
 
         .data
-_acia_baud: .byte 0     ; 0: 38400, 1: 57600, 2: 115200, 3: 230400
+_acia_baud: .byte 0     ; 0: 38400, 1: 57600
 
         .rodata
-turbo:  .byte   $02, $01, $00   ; ACIA_TURBO for 57600, 115200, 230400
+turbo:  .byte   $02             ; ACIA_TURBO for 57600
 
         .bss
 want:   .res 1
@@ -69,7 +69,11 @@ _acia_init:
         rts
 
 ; unsigned char acia_speed(void): sets the rate acia_baud names, returning
-; false (and going back to 38400) if it can't. Above 38400 that is
+; false (and going back to 38400) if it can't. Turbo232's 115200 and 230400
+; aren't offered: a TeensyROM paces received bytes by the rate alone once
+; the last one has been read, 68 and 34 cycles apart, and the NMI handler
+; takes about 100, so each NMI would interrupt the one before and the stack
+; would overflow. At 57600 they are 136 cycles apart; see nmi. 57600 is
 ; Turbo232's: the control register's rate bits at 0 to say "use the speed
 ; register", then the speed register, which a Turbo232 (and VICE) only
 ; accepts in that order; the TeensyROM takes either. A Turbo232 reads the
@@ -128,6 +132,14 @@ _acia_done:
 ; straight from the RAM vector at $FFFA while far.s has the KERNAL and I/O
 ; switched out, with no registers saved. NMIs that aren't the ACIA's
 ; (RESTORE) are ignored.
+;
+; Reading the data register lets a TeensyROM send the next byte, which it
+; does as soon as the rate's gap since the last one has passed (136 cycles
+; at 57600). Badlines and the title bar's sprites can stretch this handler
+; past that, so the next NMI may arrive before it returns. So the byte's
+; slot is taken (head moved on) and the hold decided before the data is
+; read: an NMI that interrupts after that point stores its byte in the
+; next slot, and this one's lands in its own before the program sees it.
 nmi:
 nmi_entry:
         pha
@@ -140,27 +152,32 @@ nmi_entry:
         beq     @out
         txa
         pha
-        lda     ACIA_DATA
         ldx     head
         inx
         cpx     tail
         beq     @full           ; ring full: drop (shouldn't happen)
-        dex
-        sta     RING,x
-        inx
         stx     head
         txa
         sec
         sbc     tail
         cmp     #HIGH_WATER
-        bcc     @done
+        bcc     @read
         lda     #CMD_HOLD
         sta     ACIA_CMD
         sta     held
-@full:
-@done:  pla
+@read:  dex
+        lda     ACIA_DATA
+        sta     RING,x
+        pla
         tax
 @out:   pla
+        sta     $01
+        pla
+        rti
+@full:  lda     ACIA_DATA
+        pla
+        tax
+        pla
         sta     $01
         pla
         rti

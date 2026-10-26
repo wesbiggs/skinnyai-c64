@@ -26,7 +26,7 @@ unsigned char dirty;
 static char *arg;                       /* the rest of a command line */
 
 /* The serial rates, as acia_baud numbers them. */
-const char *const bauds[4] = { "38400", "57600", "115200", "230400" };
+const char *const bauds[2] = { "38400", "57600" };
 
 /* ---- helpers ---- */
 
@@ -247,7 +247,7 @@ static void help_set(void)
         "autosave / noautosave\n"
         "keepalive <time>    e.g. 30m (ollama)\n"
         "context <4-63>      History K (REU)\n"
-        "baud <rate>         38400 to 230400\n"
+        "baud <rate>         38400 or 57600\n"
         "drive <8-30>        Disk drive\n");
 }
 
@@ -440,11 +440,11 @@ static void cmd_set(void)
         info(apikey[0] ? "Set API key." : "Cleared API key.");
     } else if (!strcmp(w, "baud")) {
         v = word(0);
-        for (n = 0; n < 4 && strcmp(v, bauds[n]); ++n)
+        for (n = 0; n < 2 && strcmp(v, bauds[n]); ++n)
             ;
-        if (n == 4) {
-            info("Usage: /set baud 38400|57600|115200|230400");
-            info("Above 38400 needs a Turbo232-style modem (the TeensyROM's); a plain SwiftLink stops working.");
+        if (n == 2) {
+            info("Usage: /set baud 38400|57600");
+            info("57600 needs a Turbo232-style modem (the TeensyROM's); a plain SwiftLink stops working.");
             return;
         }
         acia_baud = n;
