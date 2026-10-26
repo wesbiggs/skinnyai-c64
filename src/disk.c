@@ -213,6 +213,7 @@ void mf_write(void (*put)(unsigned char))
         w_q(sysmsg, 0);
     }
     for (p = 0; p < hist_len; p = hist_next(p)) {
+        if (is_tool(hist_peek(p))) continue;    /* a Modelfile can't hold them */
         w_s(hist_peek(p) == 'u' ? "MESSAGE user " : "MESSAGE assistant ");
         w_q((const char *)(p + HDR), 1);
     }

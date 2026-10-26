@@ -134,6 +134,10 @@ static void memory(char *s)
     strcat(s, reu_banks >= 16 ? "M" : "K");
 }
 
+/* Start-up only: the BOOT segment (see boot.s). */
+#pragma code-name (push, "BOOT")
+#pragma rodata-name (push, "BOOT")
+
 /* A row of the welcome table, as markdown for screen.c's table drawing. */
 static void row(const char *name, const char *value)
 {
@@ -205,6 +209,38 @@ static void setup(void)
     if (cfg_save()) info("Saved to skinnyai.cfg (/config saves changes).");
     else err(dstat);
 }
+
+/* Everything before the first prompt. */
+static void start(void)
+{
+    unsigned char *last_drive = (unsigned char *)0xBA;
+
+    if (*last_drive >= 8 && *last_drive <= 30) drive = *last_drive;
+    scr_init();
+    status_bar();
+    hist_init();
+    out_line(C_DIM, "Reading skinnyai.cfg...");
+    if (!cfg_load()) {
+        scr_clear();
+        setup();
+    }
+    if (context_kb < 4 || context_kb > 63) context_kb = 32;
+    hist_limit();
+    scr_clear();
+    welcome();
+    if (!net_init()) {
+        err("No modem answered on the SwiftLink at $DE00 (on a TeensyROM: Special IO, Swift-Turbo/Modem). Restart once it's on; saved chats still work.");
+    } else if (baud_fell_back) {
+        err("The saved serial rate needs a TeensyROM, so it's 38400.");
+    }
+    if (modem_ok && !eth_ok) {
+        err("The network didn't start (ATC); check the cable and the modem's network settings. Messages will try again.");
+    }
+    out_nl();
+}
+
+#pragma rodata-name (pop)
+#pragma code-name (pop)
 
 /* ---- help ---- */
 
@@ -312,6 +348,7 @@ static void show_settings(void)
     label("Markdown: ", md_on ? "on" : "off");
     label("Pager: ", pager ? "on" : "off");
     label("Autosave: ", autosave ? "on" : "off");
+    label("Tools: ", tools_on() ? "web_search, fetch_page" : "off");
     if (api == API_OLLAMA) label("Keep-alive: ", keepalive[0] ? keepalive : "server default");
     label("API key: ", apikey[0] ? "set" : "none");
     label("Drive: ", utoa(drive, num, 10));
@@ -548,7 +585,7 @@ static void replay(void)
             out_nl();
             out_nl();
             out_color(C_TEXT);
-        } else {
+        } else if (hist_peek(p) == 'a') {
             md_reset();
             for (t = p + HDR; (c = hist_peek(t)); ++t) md_c(c);
             md_end();
@@ -684,30 +721,8 @@ static unsigned char command(char *line)
 int main(void)
 {
     unsigned char k;
-    unsigned char *last_drive = (unsigned char *)0xBA;
 
-    if (*last_drive >= 8 && *last_drive <= 30) drive = *last_drive;
-    scr_init();
-    status_bar();
-    hist_init();
-    out_line(C_DIM, "Reading skinnyai.cfg...");
-    if (!cfg_load()) {
-        scr_clear();
-        setup();
-    }
-    if (context_kb < 4 || context_kb > 63) context_kb = 32;
-    hist_limit();
-    scr_clear();
-    welcome();
-    if (!net_init()) {
-        err("No modem answered on the SwiftLink at $DE00 (on a TeensyROM: Special IO, Swift-Turbo/Modem). Restart once it's on; saved chats still work.");
-    } else if (baud_fell_back) {
-        err("The saved serial rate needs a TeensyROM, so it's 38400.");
-    }
-    if (modem_ok && !eth_ok) {
-        err("The network didn't start (ATC); check the cable and the modem's network settings. Messages will try again.");
-    }
-    out_nl();
+    start();
 
     for (;;) {
         if (!input_line("> ", "", INPUT_MAX, 1)) continue;

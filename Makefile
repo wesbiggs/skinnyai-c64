@@ -3,7 +3,7 @@ CL65   ?= cl65
 C1541  ?= c1541
 CFLAGS  = -t c64 -Ors --static-locals -g
 SRC     = src/main.c src/screen.c src/input.c src/json.c src/net.c src/chat.c src/disk.c
-ASM     = src/acia.s src/far.s src/jsonfast.s src/exehdr.s
+ASM     = src/acia.s src/far.s src/jsonfast.s src/exehdr.s src/boot.s
 DIST    = dist
 
 all: $(DIST)/skinnyai.prg $(DIST)/skinnyai.d64

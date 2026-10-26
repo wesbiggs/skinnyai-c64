@@ -10,9 +10,11 @@ char ibuf[INPUT_MAX + 1];
 static unsigned int ilen, icur, imax;
 static unsigned char srow, scol;
 
-/* Earlier lines, oldest first, each ending in a 0. */
+/* Earlier lines, oldest first, each ending in a 0. The buffer is outside
+ * the BSS (skinny.cfg's RECALL), since the start-up code runs there until
+ * the first line is typed (boot.s). */
 #define RECALL_SIZE 896
-static char recall[RECALL_SIZE];
+extern char recall[];
 static unsigned int recall_len;
 
 #define NEWLINE_GLYPH 0x6D              /* a corner, like a return arrow */
@@ -85,7 +87,7 @@ unsigned int input_line(const char *prompt, const char *initial, unsigned int ma
     unsigned char a;
     unsigned int k;
     unsigned int at = recall_len;       /* recall position: recall_len = the new line */
-    static char draft[INPUT_MAX + 1];
+    char *draft = tbuf;                 /* free while nothing is shown */
 
     out_bol();
     out_color(C_PROMPT);

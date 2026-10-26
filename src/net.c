@@ -19,6 +19,7 @@ unsigned char eth_ok;
 unsigned char modem_tr;
 unsigned char baud_fell_back;
 char net_ip[16];
+char net_date[17];
 unsigned char net_stop;
 unsigned char net_done;
 unsigned char net_spin;
@@ -350,6 +351,8 @@ static void header_line(void)
         clen = atol(hline + 15);
     } else if (strncmp(hline, "transfer-encoding:", 18) == 0 && strstr(hline, "hunked")) {
         chunked = 1;
+    } else if (strncmp(hline, "date: ", 6) == 0) {
+        strncpy(net_date, hline + 6, 16);       /* for the tools */
     }
 }
 

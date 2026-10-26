@@ -14,7 +14,14 @@
 //   ...think...     thinking first, then the answer
 //   ...nomodel...   a 404 with Ollama's "model not found" error
 //   ...hangup...    the connection closed without an answer
+//   ...search...    (a -cloud model with tools) calls web_search, then
+//                   fetch_page on a long URL, then answers with what the
+//                   fetch returned
+//   ...forever...   (a -cloud model with tools) calls web_search every time
+//                   it's offered tools
 //   anything else   "Reply <n> to <text>.", n counting the messages sent
+// /api/experimental/web_search and web_fetch answer as a signed-in Ollama
+// does, and a search for "...fail..." gets an error.
 const net = require('net');
 const fs = require('fs');
 
@@ -34,8 +41,14 @@ function lastUser(body) {
   return '';
 }
 
+const LONG_URL = 'https://example.com/a/rather/long/path/to/a/page/about/the/commodore/64/news.html';
+const PAGE_TEXT = 'The   C64\n\n\n  is   back.\t' + 'x'.repeat(3000);
+
 function replyText(body) {
   const text = lastUser(body);
+  const msgs = body.messages;
+  const last = msgs[msgs.length - 1];
+  if (last.role === 'tool') return `Read ${msgs.length}: ${last.content.slice(0, 20).replace(/\n/g, '/')}`;
   if (/markdown/i.test(text)) return MARKDOWN;
   if (/lines/i.test(text)) return Array.from({ length: 40 }, (_, i) => `Line ${i + 1}`).join('\n') + '\n';
   return `Reply ${body.messages.length} to ${text.replace(/[.?!]+$/, '')}.`;
@@ -56,6 +69,21 @@ function chatPieces(req) {
   const model = body.model;
   const pieces = [];
   const text = lastUser(body);
+  const last = body.messages[body.messages.length - 1];
+  if (!openai && body.tools && /search|forever/i.test(text)) {
+    let fn = null;
+    if (/forever/i.test(text) || last.role === 'user') {
+      fn = { name: 'web_search', arguments: { query: /fail/i.test(text) ? 'fail please' : 'c64 news' } };
+      if (/search/i.test(text)) pieces.push(ollamaLine(model, { content: 'Looking.' }, false));
+    } else if (last.tool_name === 'web_search' && !/fail/i.test(text)) {
+      fn = { name: 'fetch_page', arguments: { url: LONG_URL } };
+    }
+    if (fn) {
+      pieces.push(ollamaLine(model, { tool_calls: [{ id: 'call_1', function: { index: 0, ...fn } }] }, false));
+      pieces.push(ollamaLine(model, {}, true));
+      return pieces;
+    }
+  }
   if (/think/i.test(text)) {
     for (const w of words('Let me think about it.')) {
       pieces.push(openai ? openaiLine(model, { reasoning_content: w }) : ollamaLine(model, { thinking: w }, false));
@@ -76,7 +104,7 @@ function chatPieces(req) {
 
 function send(sock, status, type, pieces) {
   const reason = { 200: 'OK', 404: 'Not Found' }[status] || 'Error';
-  sock.write(`HTTP/1.1 ${status} ${reason}\r\nContent-Type: ${type}\r\nConnection: close\r\n\r\n`);
+  sock.write(`HTTP/1.1 ${status} ${reason}\r\nContent-Type: ${type}\r\nDate: Mon, 26 Oct 2026 12:00:00 GMT\r\nConnection: close\r\n\r\n`);
   // a little apart, as a real server streams them
   let i = 0;
   const next = () => {
@@ -130,6 +158,15 @@ function answer(sock, req) {
       model_info: { 'mock.context_length': 8192 },
       capabilities: ['completion', 'tools'],
     });
+  }
+  if (method === 'POST' && path === '/api/experimental/web_search') {
+    if (/fail/.test(body.query)) return sendJson(sock, 401, { error: 'unauthorized' });
+    return sendJson(sock, 200, { results: Array.from({ length: body.max_results || 5 }, (_, i) => ({
+      title: `Result ${i + 1}`, url: `https://example.com/${i + 1}`, content: `Text   of\n\n\nresult ${i + 1}. ` + 'y'.repeat(1000),
+    })) });
+  }
+  if (method === 'POST' && path === '/api/experimental/web_fetch') {
+    return sendJson(sock, 200, { title: 'C64 news', content: PAGE_TEXT, links: [LONG_URL] });
   }
   if (method === 'POST' && (path === '/api/chat' || path === '/v1/chat/completions')) {
     const text = lastUser(body);

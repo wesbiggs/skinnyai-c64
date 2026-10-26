@@ -308,6 +308,7 @@ def ollama_chat():
     check(body['model'] == 'mock:7b' and body['stream'] is True, 'model or stream: %r' % body)
     check(body['keep_alive'] == '1h', 'keep_alive: %r' % body.get('keep_alive'))
     check(body['messages'] == [{'role': 'user', 'content': 'Hello there'}], 'messages: %r' % body['messages'])
+    check('tools' not in body, 'tools offered to a local model')
 
     # the whole conversation goes each time
     c.run('And again', 'Reply 3 to And again.')
@@ -359,6 +360,12 @@ def ollama_chat():
     out = c.run('hangup please', 'Error: The server closed the connection without answering.')
     c.run('Still there?', 'Still there.')
     check(len(c.last_request()['body']['messages']) == n + 2, 'failed turns were kept in the history')
+
+    # CRSR up brings back earlier lines (from the buffer the start-up code ran in)
+    c.cls()
+    c.type('\\u\\u\\r')
+    c.wait(lambda rows: 'to Still there.' in '\n'.join(rows) and at_prompt(rows))
+    check(c.last_request()['body']['messages'][-1]['content'] == 'Still there?', 'recalled: %r' % c.last_request()['body']['messages'][-1])
 
 
 @test
@@ -455,6 +462,74 @@ def save_and_load():
     cfg = c.read_file('skinnyai.cfg')
     for want in ('host=127.0.0.1\n', 'port=11500\n', 'api=ollama\n', 'model=nosuch:1b\n', 'pager=1\n'):
         check(want in cfg, 'skinnyai.cfg has no %r:\n%s' % (want, cfg))
+
+
+@test
+def cloud_tools():
+    """A -cloud model gets web_search and fetch_page, which run through the
+    server's /api/experimental endpoints, and the calls and results go back
+    in the history; saved chats leave them out."""
+    c = C64('cloud_tools', cfg=dict(OLLAMA_CFG, model='mock:7b-cloud'))
+    yield c
+    c.ready()
+    c.run('/show settings', 'Tools: web_search, fetch_page')
+    c.cls()
+    out = c.run('Please search', ['Looking.', 'Searching: c64 news',
+                                  'Fetching: https://example.com/a/', 'Read 6: C64 news/The C64/is'])
+    reqs = c.requests()
+    check([r['path'] for r in reqs] == ['/api/chat', '/api/experimental/web_search', '/api/chat',
+                                        '/api/experimental/web_fetch', '/api/chat'],
+          'requests: %r' % [r['path'] for r in reqs])
+    tools = reqs[0]['body'].get('tools') or []
+    check([t['function']['name'] for t in tools] == ['web_search', 'fetch_page'], 'tools: %r' % tools)
+    check('Today is Mon, 26 Oct 2026.' not in tools[0]['function']['description'], 'a date before any reply')
+    check(reqs[1]['body'] == {'query': 'c64 news', 'max_results': 3}, 'search: %r' % reqs[1]['body'])
+    check(reqs[3]['body'] == {'url': 'https://example.com/a/rather/long/path/to/a/page/about/the/commodore/64/news.html'},
+          'fetch: %r' % reqs[3]['body'])
+    check('Today is Mon, 26 Oct 2026.' in reqs[2]['body']['tools'][0]['function']['description'], 'no date from the server')
+    msgs = reqs[4]['body']['messages']
+    check([m['role'] for m in msgs] == ['user', 'assistant', 'assistant', 'tool', 'assistant', 'tool'],
+          'roles: %r' % msgs)
+    check(msgs[1] == {'role': 'assistant', 'content': 'Looking.'}, 'content before the call: %r' % msgs[1])
+    check(msgs[2] == {'role': 'assistant', 'content': '', 'tool_calls': [
+        {'function': {'name': 'web_search', 'arguments': {'query': 'c64 news'}}}]}, 'the call: %r' % msgs[2])
+    result = msgs[3]['content']
+    check(msgs[3]['tool_name'] == 'web_search', 'tool_name: %r' % msgs[3])
+    check(result.startswith('Result 1\nhttps://example.com/1\nText of\nresult 1. yyy'), 'search result: %r' % result[:80])
+    check('\n\nResult 3\n' in result and 'Result 4' not in result and len(result) < 2400, 'search result:\n' + result)
+    check(msgs[4]['tool_calls'][0]['function']['name'] == 'fetch_page', 'fetch call: %r' % msgs[4])
+    check(msgs[5]['tool_name'] == 'fetch_page' and msgs[5]['content'].startswith('C64 news\nThe C64\nis back. xxx'),
+          'fetch result: %r' % msgs[5]['content'][:60])
+    check(1500 < len(msgs[5]['content']) < 1650, 'fetch result length %d' % len(msgs[5]['content']))
+
+    # the tool messages stay in the conversation
+    c.cls()
+    c.run('And then?', 'Reply 8 to And then.')
+    check(len(c.last_request()['body']['messages']) == 8, 'history: %r' % c.last_request()['body']['messages'])
+
+    # a tool's error goes to the model too
+    c.cls()
+    out = c.run('Search and fail', ['Searching: fail please', 'unauthorized', 'Read 13: Error: unauthorized'])
+    check(c.last_request()['body']['messages'][-1]['content'] == 'Error: unauthorized', 'error result')
+
+    # at most 5 rounds of tools, then an answer without them
+    c.cls()
+    n = len(c.requests())
+    c.run('Go on forever', 'Read 25: Result 1/https://exa', timeout=90)
+    chats = [r for r in c.requests()[n:] if r['path'] == '/api/chat']
+    check(len(chats) == 6 and all('tools' in r['body'] for r in chats[:5]) and 'tools' not in chats[5]['body'],
+          'rounds: %r' % [('tools' in r['body']) for r in chats])
+
+    # a model without -cloud gets no tools, but the history still goes
+    c.run('/set model mock:7b', 'Switched model')
+    c.run('Local now', 'Reply 27 to Local now.')
+    check('tools' not in c.last_request()['body'], 'tools for a local model')
+    c.run('/show settings', 'Tools: off')
+    c.run('/save tooled', 'Saved')
+    c.quit()
+    mf = c.read_file('tooled.mf')
+    check(mf.count('MESSAGE user') == 5 and mf.count('MESSAGE assistant') == 7 and 'Text of' not in mf,
+          'saved chat:\n' + mf)
 
 
 @test

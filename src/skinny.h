@@ -71,6 +71,7 @@ extern unsigned char crow, ccol, curcolor;
 extern unsigned char a2s[128];
 extern unsigned char pg_on, pg_lines, pg_quit;
 extern unsigned char md_on;
+extern char tbuf[];             /* markdown tables; the line editor's draft */
 
 void scr_init(void);
 void scr_clear(void);
@@ -123,6 +124,7 @@ extern unsigned char eth_ok;            /* ATC succeeded */
 extern unsigned char modem_tr;          /* ATI says TeensyROM: polled */
 extern unsigned char baud_fell_back;    /* the saved rate needs a TeensyROM: 38400 */
 extern char net_ip[16];                 /* the C64's address, from ATC */
+extern char net_date[17];               /* "Mon, 26 Oct 2026", from the server */
 extern unsigned char net_stop;
 extern unsigned char net_done;
 extern unsigned char net_spin;          /* show a spinner while waiting */
@@ -147,6 +149,12 @@ void __fastcall__ far_move(unsigned int dst, unsigned int src, unsigned int n);
  * Messages at offsets in far memory: a header (role, length, JSON length),
  * the text, and a 0. */
 #define HDR 5
+/* Tool calls (the text is the search or the URL) and their results. A
+ * result's role is its call's in upper case. Saved chats leave them out. */
+#define T_SEARCH 's'
+#define T_FETCH  'f'
+#define T_RESULT 0x20                   /* the bit a result doesn't have */
+#define is_tool(role) (((role) | T_RESULT) == T_SEARCH || ((role) | T_RESULT) == T_FETCH)
 #ifndef HIST_TOP
 #define HIST_TOP  0xFFF8u               /* the end of the RAM history */
 #endif
@@ -167,6 +175,7 @@ void tx_jsf(unsigned int off, unsigned int jlen);
 
 /* ---- chat.c ---- */
 void chat_turn(const char *text);
+unsigned char tools_on(void);
 void list_models(void);
 void show_info(void);
 void show_last_reply(void);

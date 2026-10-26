@@ -7,12 +7,12 @@
 
 /* ---- history ----
  * Far memory (far.s: an REU, or the RAM under I/O and the KERNAL), holding
- * messages one after another: a header (the role, 'u' or 'a', then the
- * text's length and its length as a JSON string, two bytes each), the
- * text, and a 0. With the lengths, going through the messages and working
- * out a request's Content-Length never has to read the text itself. When
- * it fills, the oldest exchange is dropped, never the one in progress
- * (from turn_start on). */
+ * messages one after another: a header (the role, 'u' or 'a' or one of
+ * the T_ tool roles in skinny.h, then the text's length and its length as
+ * a JSON string, two bytes each), the text, and a 0. With the lengths,
+ * going through the messages and working out a request's Content-Length
+ * never has to read the text itself. When it fills, the oldest exchange is
+ * dropped, never the one in progress (from turn_start on). */
 
 unsigned int hist_len, hist_cap, turn_start;
 unsigned char hist_dropped, hist_truncated;
@@ -50,14 +50,15 @@ unsigned int hist_count(void)
     return n;
 }
 
-/* Drops the oldest message, and the reply to it, from before turn_start. */
+/* Drops the oldest message, and the replies and tool calls that answer it,
+ * from before turn_start. */
 static unsigned char drop_oldest(void)
 {
     unsigned int n;
     unsigned char k;
-    for (k = 0; k < 2; ++k) {
+    for (k = 0; ; ++k) {
         if (!turn_start) return k;
-        if (k && hist_peek(0) != 'a') break;
+        if (k && hist_peek(0) == 'u') break;
         n = hist_next(0);
         far_move(0, n, hist_len - n);
         hist_len -= n;
@@ -159,10 +160,56 @@ static void tx_role(const char *role)
     tx_s("\",\"content\":");
 }
 
+/* ---- tools: web_search and fetch_page, for Ollama's cloud models ----
+ * A local Ollama that's signed in to ollama.com runs cloud models, and
+ * proxies Ollama's web search and fetch APIs over plain HTTP, so the C64
+ * can offer the model skinnyai's two tools and run them itself. */
+
+#define TOOL_ROUNDS  5          /* then the model has to answer */
+#define SEARCH_TEXT  400        /* characters of each result's page text */
+#define FETCH_TEXT   1500
+
+static unsigned char tool_round;
+static const char *const tool_names[2] = { "web_search", "fetch_page" };
+static const char *const tool_args[2] = { "query", "url" };
+static const char *const tool_descs[2] = {
+    "Search the web. Returns the top results' titles, URLs, and the start of their text.",
+    "Fetch a web page's text, to read a search result. Long pages are cut off."
+};
+
+unsigned char tools_on(void)
+{
+    unsigned char n = strlen(model);
+    return api == API_OLLAMA && n > 6 && !strcmp(model + n - 6, "-cloud");
+}
+
+static unsigned char offering(void)
+{
+    return tools_on() && tool_round < TOOL_ROUNDS;
+}
+
+static void tx_tool(unsigned char t)
+{
+    tx_s("{\"type\":\"function\",\"function\":{\"name\":\"");
+    tx_s(tool_names[t]);
+    tx_s("\",\"description\":\"");
+    tx_s(tool_descs[t]);
+    if (!t && net_date[0]) {
+        tx_s(" Today is ");
+        tx_s(net_date);
+        tx_c('.');
+    }
+    tx_s("\",\"parameters\":{\"type\":\"object\",\"properties\":{\"");
+    tx_s(tool_args[t]);
+    tx_s("\":{\"type\":\"string\"}},\"required\":[\"");
+    tx_s(tool_args[t]);
+    tx_s("\"]}}}");
+}
+
 static void body_chat(void)
 {
     unsigned int p;
-    unsigned char i, first = 1;
+    unsigned char i, role, t, calls = 0, first = 1;
 
     tx_s("{\"model\":");
     tx_js(model);
@@ -174,13 +221,46 @@ static void body_chat(void)
         first = 0;
     }
     for (p = 0; p < hist_len; p = hist_next(p)) {
+        role = hist_peek(p);
+        t = (role | T_RESULT) == T_FETCH;
+        if (is_tool(role) && api != API_OLLAMA) continue;
+        if (calls && role != T_SEARCH && role != T_FETCH) {
+            tx_s("]}");
+            calls = 0;
+        }
         if (!first) tx_c(',');
         first = 0;
-        tx_role(hist_peek(p) == 'u' ? "user" : "assistant");
+        if (role == T_SEARCH || role == T_FETCH) {
+            /* calls one after another are one message's tool_calls */
+            if (!calls) tx_s("{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[");
+            calls = 1;
+            tx_s("{\"function\":{\"name\":\"");
+            tx_s(tool_names[t]);
+            tx_s("\",\"arguments\":{\"");
+            tx_s(tool_args[t]);
+            tx_s("\":");
+            tx_jsf(p + HDR, hist_word(p + 3));
+            tx_s("}}}");
+            continue;
+        }
+        tx_role(role == 'u' ? "user" : role == 'a' ? "assistant" : "tool");
         tx_jsf(p + HDR, hist_word(p + 3));
+        if (is_tool(role)) {
+            tx_s(",\"tool_name\":\"");
+            tx_s(tool_names[t]);
+            tx_c('"');
+        }
         tx_c('}');
     }
+    if (calls) tx_s("]}");
     tx_c(']');
+    if (offering()) {
+        tx_s(",\"tools\":[");
+        tx_tool(0);
+        tx_c(',');
+        tx_tool(1);
+        tx_c(']');
+    }
     if (api == API_OLLAMA) {
         if (nparams) {
             tx_s(",\"options\":{");
@@ -220,16 +300,36 @@ static void body_chat(void)
 #define S_NONE    0
 #define S_CONTENT 1
 #define S_THINK   2
+#define S_ARG     3             /* a tool call's search or URL */
 
 static unsigned char smode, got_content, thinking_open, cut_off;
+static unsigned char open_role;         /* the message being added to */
 static unsigned long eval_count, prompt_count, eval_ms, total_ms;
 static unsigned int t_start;
 
+static void msg_close(void)
+{
+    if (open_role) hist_end();
+    open_role = 0;
+}
+
+static void msg_open(unsigned char role)
+{
+    msg_close();
+    if (hist_begin(role)) open_role = role;
+    else hist_truncated = 1;
+}
+
 static unsigned char chat_begin(void)
 {
+    smode = S_NONE;
     if (KEY("content")) smode = S_CONTENT;
     else if (KEY("thinking") || KEY("reasoning_content") || KEY("reasoning")) smode = S_THINK;
-    else smode = S_NONE;
+    else if ((KEY("query") || KEY("url")) && offering()) {
+        /* a tool call: its argument is kept as a message of its own */
+        smode = S_ARG;
+        msg_open(json_key[0] == 'q' ? T_SEARCH : T_FETCH);
+    }
     return smode != S_NONE;
 }
 
@@ -255,13 +355,17 @@ static void chat_char(unsigned char c)
         out_cc(c, C_DIM);
         return;
     }
-    if (!got_content) {
+    if (smode == S_ARG) {
+        hist_addc(c);
+        return;
+    }
+    if (open_role != 'a') {
         if (c == '\n' || c == ' ') return;     /* leading blank lines */
         close_thinking();
         net_spin = 0;
         spin_clear();
         got_content = 1;
-        if (!hist_begin('a')) hist_truncated = 1;
+        msg_open('a');
     }
     hist_addc(c);
     md_c(c);
@@ -348,9 +452,105 @@ static void show_error(int r)
     out_color(C_TEXT);
 }
 
+/* A tool's result, as it streams in: the pages' titles, URLs, and text,
+ * with runs of blank space squeezed out, and each piece cut short. */
+static unsigned int tool_call, res_left, res_text;
+static unsigned char res_prev;
+
+static unsigned char tool_begin(void)
+{
+    unsigned char any = res_prev != 0;
+    if (KEY("title")) {
+        res_left = 120;
+        if (any) hist_addc('\n');
+    } else if (KEY("url")) {
+        res_left = 200;
+    } else if (KEY("content")) {
+        res_left = res_text;
+    } else {
+        return 0;
+    }
+    if (any) hist_addc('\n');
+    res_prev = '\n';
+    return 1;
+}
+
+static void tool_char(unsigned char c)
+{
+    if (!res_left) return;
+    if (c == '\t' || c == '\r') c = ' ';
+    if (c == ' ' && (res_prev == ' ' || res_prev == '\n')) return;
+    if (c == '\n' && res_prev == '\n') return;
+    hist_addc(c);
+    res_prev = c;
+    --res_left;
+}
+
+static void body_tool(void)
+{
+    unsigned char search = hist_peek(tool_call) == T_SEARCH;
+    tx_s(search ? "{\"query\":" : "{\"url\":");
+    tx_jsf(tool_call + HDR, hist_word(tool_call + 3));
+    if (search) tx_s(",\"max_results\":3");
+    tx_c('}');
+}
+
+static void hist_adds(const char *s)
+{
+    while (*s) hist_addc(*s++);
+}
+
+/* Runs the tool calls in this turn from turn_start + from, each result
+ * going after them. Offsets are kept from turn_start, since making room
+ * moves the history. Returns how many there were, or TOOL_STOPPED. */
+#define TOOL_STOPPED 255
+static unsigned char run_tools(unsigned int from)
+{
+    unsigned int p, t, end = hist_len - turn_start;
+    unsigned char role, c, n = 0;
+    int r;
+
+    for (; from < end; from = hist_next(p) - turn_start) {
+        p = turn_start + from;
+        role = hist_peek(p);
+        if (role != T_SEARCH && role != T_FETCH) continue;
+        ++n;
+        out_bol();
+        out_color(C_DIM);
+        out_s(role == T_SEARCH ? "Searching: " : "Fetching: ");
+        for (t = p + HDR; (c = hist_peek(t)); ++t) out_c(c);
+        out_nl();
+
+        msg_open(role & ~T_RESULT);
+        tool_call = turn_start + from;
+        res_text = role == T_SEARCH ? SEARCH_TEXT : FETCH_TEXT;
+        res_prev = 0;
+        json_on_begin = tool_begin;
+        json_on_char = tool_char;
+        json_on_value = chat_value;     /* for an error */
+        net_spin = 1;
+        r = http_request("POST", role == T_SEARCH ? "/api/experimental/web_search" : "/api/experimental/web_fetch", body_tool);
+        net_spin = 0;
+        spin_clear();
+        if (r != 200) {
+            /* the model hears about it too */
+            if (!net_err[0]) strcpy(net_err, "no reply");
+            out_line(C_ERR, net_err);
+            hist_adds("Error: ");
+            hist_adds(net_err);
+        }
+        msg_close();
+        if (r == NET_ABORT) return TOOL_STOPPED;
+        p = turn_start + from;
+    }
+    return n;
+}
+
 void chat_turn(const char *text)
 {
     int r;
+    unsigned int from;
+    unsigned char tools;
 
     turn_start = hist_len;
     if (!hist_begin('u')) {
@@ -365,32 +565,44 @@ void chat_turn(const char *text)
     }
     hist_end();
 
-    smode = got_content = thinking_open = cut_off = 0;
+    got_content = open_role = tool_round = 0;
     eval_count = prompt_count = eval_ms = total_ms = 0;
-    json_on_begin = chat_begin;
-    json_on_char = chat_char;
-    json_on_value = chat_value;
-    md_reset();
     pg_on = pager;
     pg_quit = 0;
     pg_lines = 0;
     hist_dropped = 0;
     out_color(C_TEXT);
     out_nl();                           /* a blank row before the reply */
-    net_spin = 1;
     t_start = ticks();
 
-    r = http_request("POST", api == API_OLLAMA ? "/api/chat" : "/v1/chat/completions", body_chat);
+    for (;;) {
+        smode = thinking_open = cut_off = 0;
+        json_on_begin = chat_begin;
+        json_on_char = chat_char;
+        json_on_value = chat_value;
+        md_reset();
+        net_spin = 1;
+        from = hist_len - turn_start;
+        tools = offering();
 
-    net_spin = 0;
-    spin_clear();
-    md_end();
-    pg_on = 0;
-    if (got_content) hist_end();
-    if (thinking_open) {
-        if (cut_off) out_line(C_ERR, "Cut off: ran out of tokens while still thinking (/set parameter num_predict).");
-        close_thinking();
+        r = http_request("POST", api == API_OLLAMA ? "/api/chat" : "/v1/chat/completions", body_chat);
+
+        net_spin = 0;
+        spin_clear();
+        md_end();
+        msg_close();
+        if (thinking_open) {
+            if (cut_off) out_line(C_ERR, "Cut off: ran out of tokens while still thinking (/set parameter num_predict).");
+            close_thinking();
+        }
+        if (r != 200 || !tools) break;
+        tools = run_tools(from);
+        if (tools == TOOL_STOPPED) r = NET_ABORT;
+        if (!tools || r != 200) break;
+        ++tool_round;
+        out_color(C_TEXT);
     }
+    pg_on = 0;
     out_bol();
     if (got_content && r == NET_ABORT) {
         out_line(C_DIM, "(stopped)");

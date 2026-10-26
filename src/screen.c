@@ -272,7 +272,9 @@ void out_line(unsigned char color, const char *s)
 #define BOX_BT   0x71   /* ┴ */
 #define BOX_X    0x5B   /* ┼ */
 
-static char tbuf[TBUF];
+/* A table's text, until it's complete. Between replies, the line editor
+ * keeps the line being typed here while CRSR up looks at earlier ones. */
+char tbuf[TBUF];
 static unsigned int tlen;
 static unsigned char md_table, md_tnl;
 static char cell[MAXCOLS][CELLMAX];
