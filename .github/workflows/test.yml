@@ -25,13 +25,15 @@ jobs:
           sudo apt-get install -y -qq cc65 build-essential pkg-config flex bison xa65 dos2unix file zlib1g-dev libcurl4-openssl-dev
 
       # Debian's vice package has no ROMs, so VICE is built from source,
-      # with its headless UI, and cached.
+      # with its headless UI, and cached. --disable-arch: by default it's
+      # built with -march=native, and a cached build then dies with SIGILL
+      # on a runner whose CPU lacks something the builder's had.
       - name: Cache VICE
         id: vice-cache
         uses: actions/cache@v6
         with:
           path: /opt/vice
-          key: vice-${{ env.VICE_VERSION }}-headless-logfix-${{ runner.os }}-${{ runner.arch }}
+          key: vice-${{ env.VICE_VERSION }}-headless-logfix-noarch-${{ runner.os }}-${{ runner.arch }}
 
       - name: Build VICE
         if: steps.vice-cache.outputs.cache-hit != 'true'
@@ -46,7 +48,7 @@ jobs:
           if grep -q 'if ((log_to_file) || (!log_colorize))' src/log.c; then
             echo "::error::the src/log.c patch didn't apply"; exit 1
           fi
-          ./configure --prefix=/opt/vice --enable-headlessui --disable-pdf-docs --disable-html-docs \
+          ./configure --prefix=/opt/vice --enable-headlessui --disable-arch --disable-pdf-docs --disable-html-docs \
             --without-pulse --without-alsa --without-png --without-gif --disable-ffmpeg
           make -j"$(nproc)"
           sudo make install
