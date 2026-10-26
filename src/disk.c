@@ -625,10 +625,9 @@ static void cfg_line(void)
     else if (!strcmp(rline, "keepalive")) strncpy(keepalive, eq, sizeof keepalive - 1);
     else if (!strcmp(rline, "context")) context_kb = atoi(eq);
     else if (!strcmp(rline, "baud")) {
-        for (k = 0; k < 2 && strcmp(eq, bauds[k]); ++k)
+        for (k = 0; k < 4 && strcmp(eq, bauds[k]); ++k)
             ;
-        if (k < 2) acia_baud = k;
-        else if (strlen(eq) > 5) acia_baud = 1; /* 115200 or 230400, no longer offered */
+        if (k < 4) acia_baud = k;
     }
     else if (!strcmp(rline, "system")) strncpy(sysmsg, eq, SYS_MAX - 1);
     else if (!strcmp(rline, "pager")) pager = *eq == '1';

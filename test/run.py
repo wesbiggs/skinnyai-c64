@@ -88,7 +88,8 @@ def c1541(image, *args):
 class C64:
     """One emulator session, with its own disk image, fake modem and logs."""
 
-    def __init__(self, name, cfg=None, modem=True, vice_args=()):
+    def __init__(self, name, cfg=None, modem=True, vice_args=(), modem_env=None, settle=0):
+        self.settle = settle            # seconds to leave it alone before each look
         self.dir = os.path.join(OUT, name)
         shutil.rmtree(self.dir, ignore_errors=True)
         os.makedirs(self.dir)
@@ -104,18 +105,18 @@ class C64:
         for port in (MOCK_PORT, MODEM_PORT, MON_PORT):
             check(not listening(port), 'port %d is in use: is something left from another run?' % port)
         try:
-            self.start(modem, vice_args)
+            self.start(modem, vice_args, modem_env or {})
         except BaseException:
             self.quit()
             raise
 
-    def start(self, modem, vice_args):
+    def start(self, modem, vice_args, modem_env):
         mon.disconnect()
         self.mock = self.spawn(['node', 'test/mock-server.js', str(MOCK_PORT), self.reqlog], 'mock.log')
         wait_port(MOCK_PORT)
         if modem:
             self.spawn(['node', 'tools/fakemodem.js', str(MODEM_PORT)], 'modem.log',
-                       env={'FAKEMODEM_ATC_DELAY': '200'})
+                       env=dict({'FAKEMODEM_ATC_DELAY': '200'}, **modem_env))
             wait_port(MODEM_PORT)
         vicerc = os.path.join(self.dir, 'vicerc')
         with open(vicerc, 'w') as f:
@@ -154,6 +155,7 @@ class C64:
         test = want if callable(want) else (lambda rows: want in '\n'.join(rows))
         limit = time.time() + timeout * SCALE
         while True:
+            time.sleep(self.settle)
             rows = self.rows()
             if test(rows):
                 return rows
@@ -318,6 +320,8 @@ def ollama_chat():
     check(c.last_request()['body']['messages'][-1]['content'] == 'Say "hi" \\ back', 'escaping')
 
     # settings that go into the request
+    c.run('/set baud 115200', 'need a TeensyROM')
+    c.run('/show settings', ['Serial: 38400', 'Receive: by NMI'])
     c.run('/set system You are terse.', 'Set system message.')
     c.run('/set parameter temperature 0.5', 'Set parameter.')
     c.run('/set parameter stop END', 'Set parameter.')
@@ -514,6 +518,33 @@ def reu_history():
     check(len(c.last_request()['body']['messages']) == 3, 'history')
     c.run('/set context 8', 'Set.')
     c.run('/show settings', ['Kept in: REU, 8K of 512K', 'Messages: 4'])
+
+
+@test
+def teensyrom_poll():
+    """A modem whose ATI says TeensyROM is polled, and takes the Turbo232
+    rates. A TeensyROM waits for each byte to be read before sending the
+    next; VICE's ACIA doesn't, and it runs a frame's worth of cycles at a
+    time, so bytes that reach it during a frame's wait arrive back to back,
+    faster than polling reads them. So the fake modem sends one byte per
+    40 ms (two frames), and the screen is only looked at (which pauses the
+    emulator, and what queues up meanwhile then arrives at once) when no
+    bytes are on their way."""
+    c = C64('teensyrom_poll', cfg=dict(OLLAMA_CFG, baud=230400), vice_args=['-acia1mode', '2'], settle=20,
+            modem_env={'FAKEMODEM_ATI': 'TeensyROM+ v0.9.0.28', 'FAKEMODEM_BPS': '25', 'FAKEMODEM_SPACED': '1'})
+    yield c
+    out = c.ready(120)
+    check('needs a TeensyROM' not in out and "network didn't start" not in out, 'welcome:\n' + out)
+    c.settle = 0.5
+    c.run('/show settings', ['Serial: 230400', 'Receive: polled (TeensyROM)'])
+    c.cls()
+    c.settle = 50                       # a reply takes about 35 s
+    c.run('Polled', 'Reply 1 to Polled.', timeout=150)
+    c.settle = 0.5
+    c.run('/set baud 115200', 'Serial rate: 115200 baud')
+    c.cls()
+    c.settle = 50
+    c.run('Still polled', 'Reply 3 to Still polled.', timeout=150)
 
 
 @test

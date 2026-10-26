@@ -16,6 +16,7 @@
 
 unsigned char modem_ok;
 unsigned char eth_ok;
+unsigned char modem_tr;
 unsigned char baud_fell_back;
 char net_ip[16];
 unsigned char net_stop;
@@ -98,7 +99,8 @@ static int result_of(void)
 }
 
 /* Sends an AT command and waits for its result, -1 on timeout. Of the
- * modem's own messages, ATC's "Local IP: ..." is kept in net_ip. */
+ * modem's own messages, ATC's "Local IP: ..." is kept in net_ip, and ATI's
+ * "TeensyROM v..." (or "TeensyROM+ v...") sets modem_tr. */
 static int modem_cmd(const char *cmd, unsigned int timeout)
 {
     int r;
@@ -110,6 +112,7 @@ static int modem_cmd(const char *cmd, unsigned int timeout)
         if (r >= 0) return r;
         for (i = 0; i < mlen; ++i) mline[i] = p2a(mline[i]) ? p2a(mline[i]) : ' ';
         if (strncmp(mline, "Local IP: ", 10) == 0) strncpy(net_ip, mline + 10, sizeof net_ip - 1);
+        if (strncmp(mline, "TeensyROM", 9) == 0) modem_tr = 1;
     }
     return -1;
 }
@@ -148,22 +151,35 @@ static void hangup(void)
     acia_flush();
 }
 
-/* Checks for the modem and brings up ethernet. */
+/* Checks for the modem, asks whether it's a TeensyROM (then it's polled,
+ * at any rate; see acia.s), and brings up ethernet. Until then it's 38400
+ * by NMI, which works with any SwiftLink. */
 unsigned char net_init(void)
 {
     int r;
     unsigned char want = acia_baud;
+    acia_baud = 0;
     acia_init();
-    baud_fell_back = acia_baud != want; /* a Turbo232 rate on a plain SwiftLink */
     put_s("\r");
     r = modem_cmd("AT", SECONDS(2));
     if (r < 0) {                        /* maybe still online from before */
         hangup();
         r = modem_cmd("AT", SECONDS(2));
     }
-    if (r < 0) return modem_ok = 0;
+    if (r < 0) {
+        acia_baud = want;               /* so /config keeps it */
+        return modem_ok = 0;
+    }
     modem_cmd("ATE0", SECONDS(2));
     modem_cmd("ATV1", SECONDS(2));
+    modem_tr = 0;
+    modem_cmd("ATI", SECONDS(2));
+    if (modem_tr) {
+        acia_setpoll(1);
+        acia_baud = want;
+        acia_speed();
+    }
+    baud_fell_back = acia_baud != want;
     net_spin = 1;
     /* start the TeensyROM's ethernet; other modems don't know ATC (ERROR) */
     r = modem_cmd("ATC", SECONDS(30));

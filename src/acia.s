@@ -5,10 +5,19 @@
 ; makes the TeensyROM hold further bytes in its own large buffer until the
 ; program has caught up; acia_get lowers it again below 1/4. So nothing is
 ; lost however long the screen takes to scroll or a pager waits for a key.
+;
+; On a TeensyROM (net.c asks it with ATI) the receive interrupt is turned
+; off instead and the chip is polled: the TeensyROM hands over the next
+; byte only once the last has been read, so nothing is lost there either,
+; and the ~100 cycles an NMI costs each byte are saved. Polled, the rate
+; only sets the least gap between bytes, so all of Turbo232's rates work. A real
+; 6551 receives at the line rate whether or not it has been read, so it
+; needs the NMI. The ring is still read first (a RESTORE NMI may have put
+; a byte there).
 
         .export _acia_init, _acia_done, _acia_get, _acia_put
         .export _acia_count, _acia_flush, _ticks
-        .export _acia_speed, _acia_baud
+        .export _acia_speed, _acia_baud, _acia_setpoll, _acia_poll
         .export _charset_init, _reset, nmi_entry
         .export _acia_head := head, _acia_tail := tail, _acia_held := held
 
@@ -23,6 +32,7 @@ NMIVEC      = $0318
 CMD_ON      = $09       ; DTR on, receive NMI on, RTS low: send to us
 CMD_HOLD    = $01       ; DTR on, receive NMI on, RTS high: hold
 CMD_OFF     = $02       ; receive NMI off
+CMD_POLL    = $0B       ; DTR on, receive NMI off, RTS low: polled
 CTRL_38400  = $1F       ; 8N1, internal clock, 38400 baud on a SwiftLink
 CTRL_TURBO  = $10       ; 8N1, internal clock, rate from ACIA_TURBO
 
@@ -30,10 +40,12 @@ HIGH_WATER  = 192
 LOW_WATER   = 64
 
         .data
-_acia_baud: .byte 0     ; 0: 38400, 1: 57600
+_acia_baud: .byte 0     ; 0: 38400, 1: 57600, 2: 115200, 3: 230400
+_acia_poll: .byte 0     ; receiving by polling, not NMI
+cmdon:  .byte CMD_ON    ; the command for receiving: CMD_ON or CMD_POLL
 
         .rodata
-turbo:  .byte   $02             ; ACIA_TURBO for 57600
+turbo:  .byte   $02, $01, $00   ; ACIA_TURBO for 57600, 115200, 230400
 
         .bss
 want:   .res 1
@@ -61,20 +73,33 @@ _acia_init:
         lda     #>nmi
         sta     NMIVEC+1
         jsr     _acia_speed
-        lda     #CMD_ON
+        lda     cmdon
         sta     ACIA_CMD
         lda     ACIA_STATUS
         lda     ACIA_DATA
         cli
         rts
 
+; void acia_setpoll(unsigned char on): receive by polling (a TeensyROM) or
+; by NMI.
+_acia_setpoll:
+        sta     _acia_poll
+        ldx     #CMD_ON
+        cmp     #0
+        beq     @set
+        ldx     #CMD_POLL
+@set:   stx     cmdon
+        stx     ACIA_CMD
+        lda     #0
+        sta     held
+        rts
+
 ; unsigned char acia_speed(void): sets the rate acia_baud names, returning
-; false (and going back to 38400) if it can't. Turbo232's 115200 and 230400
-; aren't offered: a TeensyROM paces received bytes by the rate alone once
-; the last one has been read, 68 and 34 cycles apart, and the NMI handler
-; takes about 100, so each NMI would interrupt the one before and the stack
-; would overflow. At 57600 they are 136 cycles apart; see nmi. 57600 is
-; Turbo232's: the control register's rate bits at 0 to say "use the speed
+; false (and going back to 38400) if it can't. net.c sets the faster ones
+; only when polling a TeensyROM: by NMI, the TeensyROM's gap between bytes
+; at 115200 and 230400 (68 and 34 cycles) is less than the handler takes,
+; so each NMI would interrupt the one before until the stack overflowed.
+; Above 38400 is Turbo232's: the control register's rate bits at 0 to say "use the speed
 ; register", then the speed register, which a Turbo232 (and VICE) only
 ; accepts in that order; the TeensyROM takes either. A Turbo232 reads the
 ; speed register back with bit 2 set (enhanced speed on). A plain SwiftLink
@@ -202,12 +227,20 @@ _acia_get:
         bcs     @keep
         lda     #0
         sta     held
-        lda     #CMD_ON
+        lda     cmdon
         sta     ACIA_CMD
 @keep:  pla
         ldx     #0
         rts
-@none:  lda     #$FF
+@none:  lda     _acia_poll
+        beq     @nil
+        lda     ACIA_STATUS
+        and     #$08            ; receive register full?
+        beq     @nil
+        lda     ACIA_DATA
+        ldx     #0
+        rts
+@nil:   lda     #$FF
         tax
         rts
 
@@ -218,7 +251,7 @@ _acia_put:
         beq     @wait
         lda     #0
         sta     held
-        lda     #CMD_ON
+        lda     cmdon
         sta     ACIA_CMD
 @wait:  lda     ACIA_STATUS
         and     #$10
@@ -235,15 +268,22 @@ _acia_count:
         ldx     #0
         rts
 
-; void acia_flush(void): discard whatever has been received.
+; void acia_flush(void): discard whatever has been received (polled, the
+; byte waiting in the chip; the TeensyROM's buffer goes on sending).
 _acia_flush:
-        lda     head
+        lda     _acia_poll
+        beq     @ring
+        lda     ACIA_STATUS
+        and     #$08
+        beq     @ring
+        lda     ACIA_DATA
+@ring:  lda     head
         sta     tail
         lda     held
         beq     @ok
         lda     #0
         sta     held
-        lda     #CMD_ON
+        lda     cmdon
         sta     ACIA_CMD
 @ok:    rts
 
@@ -319,7 +359,7 @@ _rx_pump:
         sta     count
 @loop:  ldx     tail
         cpx     head
-        beq     @empty
+        beq     @chip
         lda     RING,x
         inx
         stx     tail
@@ -333,7 +373,7 @@ _rx_pump:
         bcs     @keep
         lda     #0
         sta     held
-        lda     #CMD_ON
+        lda     cmdon
         sta     ACIA_CMD
 @keep:  pla
 @match: ldy     _rx_nc
@@ -362,6 +402,13 @@ _rx_pump:
         lda     #2
         ldx     #0
         rts
+@chip:  lda     _acia_poll      ; polled: straight from the chip
+        beq     @empty
+        lda     ACIA_STATUS
+        and     #$08
+        beq     @empty
+        lda     ACIA_DATA
+        jmp     @match
 @empty: lda     #0
         tax
         rts

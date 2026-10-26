@@ -26,7 +26,7 @@ unsigned char dirty;
 static char *arg;                       /* the rest of a command line */
 
 /* The serial rates, as acia_baud numbers them. */
-const char *const bauds[2] = { "38400", "57600" };
+const char *const bauds[4] = { "38400", "57600", "115200", "230400" };
 
 /* ---- helpers ---- */
 
@@ -247,7 +247,7 @@ static void help_set(void)
         "autosave / noautosave\n"
         "keepalive <time>    e.g. 30m (ollama)\n"
         "context <4-63>      History K (REU)\n"
-        "baud <rate>         38400 or 57600\n"
+        "baud <rate>         Above 38400: TR\n"
         "drive <8-30>        Disk drive\n");
 }
 
@@ -316,6 +316,7 @@ static void show_settings(void)
     label("API key: ", apikey[0] ? "set" : "none");
     label("Drive: ", utoa(drive, num, 10));
     label("Serial: ", bauds[acia_baud]);
+    if (modem_ok) label("Receive: ", modem_tr ? "polled (TeensyROM)" : "by NMI");
     label("Modem: ", !modem_ok ? "not found" : !eth_ok ? "network not started" : net_ip[0] ? net_ip : "ready");
 }
 
@@ -440,16 +441,20 @@ static void cmd_set(void)
         info(apikey[0] ? "Set API key." : "Cleared API key.");
     } else if (!strcmp(w, "baud")) {
         v = word(0);
-        for (n = 0; n < 2 && strcmp(v, bauds[n]); ++n)
+        for (n = 0; n < 4 && strcmp(v, bauds[n]); ++n)
             ;
-        if (n == 2) {
-            info("Usage: /set baud 38400|57600");
-            info("57600 needs a Turbo232-style modem (the TeensyROM's); a plain SwiftLink stops working.");
+        if (n == 4) {
+            info("Usage: /set baud 38400|57600|115200|230400");
+            info("Above 38400 needs a TeensyROM.");
+            return;
+        }
+        if (n && !modem_tr) {
+            err("Rates above 38400 need a TeensyROM (other SwiftLinks lose bytes at them), so it stays at 38400.");
             return;
         }
         acia_baud = n;
         if (!acia_speed()) {
-            err("This SwiftLink isn't a Turbo232 (like the TeensyROM's), so it stays at 38400.");
+            err("The modem didn't take the rate, so it stays at 38400.");
             return;
         }
         out_bol();
@@ -697,7 +702,7 @@ int main(void)
     if (!net_init()) {
         err("No modem answered on the SwiftLink at $DE00 (on a TeensyROM: Special IO, Swift-Turbo/Modem). Restart once it's on; saved chats still work.");
     } else if (baud_fell_back) {
-        err("The saved serial rate needs a Turbo232 (like the TeensyROM's), so it's 38400.");
+        err("The saved serial rate needs a TeensyROM, so it's 38400.");
     }
     if (modem_ok && !eth_ok) {
         err("The network didn't start (ATC); check the cable and the modem's network settings. Messages will try again.");

@@ -9,8 +9,11 @@
 // second's quiet on either side hanging up early.
 //
 // VICE doesn't pass RTS flow control over TCP, so bytes to the C64 are paced
-// (FAKEMODEM_BPS, default 2400 bytes/s) instead of held when it's busy.
+// (FAKEMODEM_BPS, default 2400 bytes/s) instead of held when it's busy:
+// a burst every 10 ms, or with FAKEMODEM_SPACED=1 one byte at a time.
 // ATC answers after FAKEMODEM_ATC_DELAY ms (default 2000), as DHCP might.
+// ATI answers FAKEMODEM_ATI (for example "TeensyROM+ v0.9.0.28", which
+// makes the program poll), or by default a name that isn't a TeensyROM's.
 //
 //   node tools/fakemodem.js [port]      (default 25232)
 
@@ -19,7 +22,9 @@ const net = require('net');
 const PORT = Number(process.argv[2] || 25232);
 const BPS = Number(process.env.FAKEMODEM_BPS || 2400);
 const ATC_DELAY = Number(process.env.FAKEMODEM_ATC_DELAY ?? 2000); // ms, as if waiting for DHCP
-const TICK = 10;                        // ms between bursts
+const ATI = process.env.FAKEMODEM_ATI || 'Fake modem';
+const SPACED = process.env.FAKEMODEM_SPACED === '1';
+const TICK = SPACED ? 1000 / BPS : 10;  // ms between bursts
 const log = (...a) => process.env.FAKEMODEM_QUIET || console.log('[modem]', ...a);
 
 // ASCII text as the firmware's ToPETSCII sends it.
@@ -51,7 +56,7 @@ net.createServer((c64) => {
       return;
     }
     sending = true;
-    const n = Math.max(1, Math.round(BPS * TICK / 1000));
+    const n = SPACED ? 1 : Math.max(1, Math.round(BPS * TICK / 1000));
     const chunk = Buffer.concat(queue.splice(0)).subarray(0);
     const now = chunk.subarray(0, n);
     const rest = chunk.subarray(n);
@@ -133,6 +138,10 @@ net.createServer((c64) => {
       return;
     }
     if (rest.startsWith('dt')) return dial(rest.slice(2).trim());
+    if (rest === 'i') {
+      info(ATI);
+      return result('OK', 0);
+    }
     info('unknown command: ' + lc);
     return result('ERROR', 4);
   };

@@ -7,7 +7,8 @@
 /* ---- acia.s ---- */
 void __fastcall__ acia_init(void);
 unsigned char __fastcall__ acia_speed(void);
-extern unsigned char acia_baud;         /* 0: 38400, 1: 57600 */
+void __fastcall__ acia_setpoll(unsigned char on);
+extern unsigned char acia_baud;         /* 0: 38400, 1: 57600, 2: 115200, 3: 230400 */
 void __fastcall__ acia_done(void);
 int __fastcall__ acia_get(void);
 void __fastcall__ acia_put(unsigned char c);
@@ -41,7 +42,7 @@ extern char session[14];        /* name of the saved chat, "" if none */
 extern unsigned char dirty;     /* messages since it was saved */
 
 void set_param(const char *name, const char *value);
-extern const char *const bauds[2];
+extern const char *const bauds[4];
 void status_bar(void);
 
 /* ---- screen.c ---- */
@@ -119,7 +120,8 @@ unsigned char key_ends(const char *k);
 
 extern unsigned char modem_ok;
 extern unsigned char eth_ok;            /* ATC succeeded */
-extern unsigned char baud_fell_back;    /* the saved rate failed: 38400 */
+extern unsigned char modem_tr;          /* ATI says TeensyROM: polled */
+extern unsigned char baud_fell_back;    /* the saved rate needs a TeensyROM: 38400 */
 extern char net_ip[16];                 /* the C64's address, from ATC */
 extern unsigned char net_stop;
 extern unsigned char net_done;
