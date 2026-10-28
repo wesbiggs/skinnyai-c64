@@ -571,7 +571,8 @@ def first_run():
     c.type('\\c11500\r')                  # \c clears the 11434 offered
     c.wait('API (ollama or openai):')
     c.type('\r')
-    c.wait('Model:')
+    out = '\n'.join(c.wait('Model:', 60))   # after the modem starts and the models are listed
+    check('Models on the server:' in out and 'tiny:1b (1B)' in out, 'setup:\n' + out)
     c.type('mock:7b\r')
     out = c.ready()
     check('http://127.0.0.1:11500' in out and 'mock:7b' in out, 'welcome:\n' + out)

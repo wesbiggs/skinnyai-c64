@@ -37,7 +37,7 @@ Copy `dist/skinnyai.prg` to the TeensyROM's SD card or USB stick and launch it f
 
 ## First run
 
-With no `skinnyai.cfg` on the disk, it asks for the server's address, its port (11434 for Ollama), the API (`ollama` or `openai`), and a model, then saves them to `skinnyai.cfg`. Then it shows the settings in a table, quietly checks for the modem (and asks it with `ATI` whether it's a TeensyROM) and runs `ATC` to start ethernet (only problems are reported; `/show settings` has the C64's IP address), and you type at the `>` prompt.
+With no `skinnyai.cfg` on the disk, it asks for the server's address, its port (11434 for Ollama), the API (`ollama` or `openai`), and, for `openai`, an API key. Then it starts the modem, lists the server's models (as `/list` does) so you can pick one, asks for the model, and saves the answers to `skinnyai.cfg`. Then it shows the settings in a table and you type at the `>` prompt. Starting the modem means quietly checking for it (and asking it with `ATI` whether it's a TeensyROM) and running `ATC` to start ethernet; only problems are reported, and `/show settings` has the C64's IP address. On later runs this happens after the table.
 
 Change settings with `/set ...` and save them as the defaults with `/config`. The drive is the one the program was loaded from (`/set drive <n>` to change it).
 

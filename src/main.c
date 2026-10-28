@@ -204,8 +204,9 @@ static void setup(void)
     ask("API (ollama or openai): ", api == API_OLLAMA ? strcpy(num, "ollama") : strcpy(num, "openai"), 8);
     api = num[0] == 'o' && num[1] == 'p' ? API_OPENAI : API_OLLAMA;
     if (api == API_OPENAI && port == 11434) port = 8000;
-    ask("Model: ", model, sizeof model);
     if (api == API_OPENAI) ask("API key (RETURN for none): ", apikey, sizeof apikey);
+    if (net_init()) list_models();      /* to choose from */
+    ask("Model: ", model, sizeof model);
     if (cfg_save()) info("Saved to skinnyai.cfg (/config saves changes).");
     else err(dstat);
 }
@@ -228,7 +229,7 @@ static void start(void)
     hist_limit();
     scr_clear();
     welcome();
-    if (!net_init()) {
+    if (!(modem_ok || net_init())) {   /* setup may have started it */
         err("No modem answered on the SwiftLink at $DE00 (on a TeensyROM: Special IO, Swift-Turbo/Modem). Restart once it's on; saved chats still work.");
     } else if (baud_fell_back) {
         err("The saved serial rate needs a TeensyROM, so it's 38400.");
