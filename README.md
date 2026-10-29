@@ -4,46 +4,44 @@
 
 A Commodore 64 port of [skinnyai](https://github.com/wesbiggs/skinnyai), the thin chat client for Ollama and OpenAI-compatible servers. It talks plain HTTP straight from the C64 through a SwiftLink-compatible ethernet modem, such as the TeensyROM's. You don't need a bridge program on another computer, just a server on your network.
 
-```
- SkinnyAI                   llama3.2:3b
-> Is 91 prime? One sentence.
-No, 91 is not prime because it is
-divisible by 7 and 13.
+![Startup screen](docs/startup-screen.png)
 
->
-```
-
-The top line is a green bar with the skinnyai logo (a thin white SKINNY and a bold light green AI, drawn as custom characters) and the model; you type after a yellow `>` in light green.
-
-## What you need
+## Requirements
 
 - A C64 (or C128 in 64 mode) with a **SwiftLink-compatible** cartridge at `$DE00` (NMI) whose modem connects to the network with `ATDT"host:port"`. The **TeensyROM** is the one this was written for: set *Special IO* to *Swift-Turbo/Modem* and connect ethernet. Its `ATC` command starts ethernet, and a modem that doesn't know `ATC` is assumed to be online already, so a WiFi modem along the lines of Zimodem should work too (untested).
-- A disk drive (real, SD2IEC, Pi1541, ...) for settings and saved chats. Without one you can still chat; nothing is saved.
+- A disk drive (real, SD2IEC, Pi1541, ...) for settings and saved chats. Without one you can still chat, but neither configuration nor chats can be saved.
+- Optionally, a RAM Expansion Unit (REU); skinnyai will use up to 32K of it for chat history if it's detected.
 - A server that speaks **plain HTTP** (the C64 can't do TLS):
   - **Ollama** on your network. By default Ollama only listens on localhost, so start it with `OLLAMA_HOST=0.0.0.0 ollama serve` (or set that in its environment).
   - Or an **OpenAI-compatible** server: llama.cpp's `server`, LM Studio, vLLM, or Ollama's own `/v1` endpoints.
 
   ollama.com, OpenAI, and Anthropic are HTTPS-only, so they're out of reach unless you run an HTTP-to-HTTPS proxy on your network.
 
-## Building
+## Configuration
 
-You need [cc65](https://cc65.github.io/) (`brew install cc65`). VICE's `c1541` is used to make the disk image.
+On the program's first run, with no `skinnyai.cfg` on the disk, it asks for the server's address, its port (11434 for Ollama), the API (`ollama` or `openai`), and, for `openai`, an optional API key. Then it starts the modem, lists the server's models (as `/list` does) so you can pick one, asks for the model, and saves the answers to `skinnyai.cfg`.
 
-```bash
-make            # dist/skinnyai.prg and dist/skinnyai.d64
-```
+Starting the modem means quietly checking for it (and asking it with `ATI` whether it's a TeensyROM) and running `ATC` to start ethernet; only problems are reported, and `/show settings` has the C64's IP address. On later runs this happens after the table showing current settings.
 
-Copy `dist/skinnyai.prg` to the TeensyROM's SD card or USB stick and launch it from the TeensyROM menu, or use the disk image: `LOAD "SKINNYAI",8` then `RUN`.
+![Example with a rendered markdown table, coloring, and the pager](docs/markup-and-pager.png)
 
-## First run
+## Features
 
-With no `skinnyai.cfg` on the disk, it asks for the server's address, its port (11434 for Ollama), the API (`ollama` or `openai`), and, for `openai`, an API key. Then it starts the modem, lists the server's models (as `/list` does) so you can pick one, asks for the model, and saves the answers to `skinnyai.cfg`. Then it shows the settings in a table and you type at the `>` prompt. Starting the modem means quietly checking for it (and asking it with `ATI` whether it's a TeensyROM) and running `ATC` to start ethernet; only problems are reported, and `/show settings` has the C64's IP address. On later runs this happens after the table.
+Chat with the model at the `>` prompt. A spinner will show while the program is waiting for a response.
 
-Change settings with `/set ...` and save them as the defaults with `/config`. The drive is the one the program was loaded from (`/set drive <n>` to change it).
+Features include:
+- Automatic word wrap of responses
+- Markdown support including bold, lists, and tables
+- Character set glyphs for common ASCII symbols (and key mappings for them)
+- Pager to scroll through responses one page or one line at a time
+- Customizable system prompt ("talk like a pirate")
+- Web search and page fetching on Ollama Cloud models
+- Save and resume chats later
+- Optional autosave (most useful with fast emulated drives)
 
 ## Commands
 
-The command set follows skinnyai, which follows `ollama run`.
+The command set follows skinnyai, which is based on the `ollama run` CLI.
 
 | Command | |
 |---|---|
@@ -63,6 +61,8 @@ The command set follows skinnyai, which follows `ollama run`.
 | `/bye`, `/exit` | Leave (offers to save first if the chat has unsaved messages). This resets the C64, which on a TeensyROM goes back to its menu |
 | `/?`, `/help` | Help; `/? set`, `/? show`, `/? keys` |
 
+Change settings with `/set ...` and save them as the defaults with `/config`. The drive is the one the program was loaded from (`/set drive <n>` to change it).
+
 `/set` takes `model <name>`, `host <address[:port]>`, `api ollama|openai`, `key <key>` (a bearer token, sent to any host), `system <text>`, `parameter <name> <value>` (for example `temperature 0.7`, `num_ctx 4096`, `stop <text>`), `format json` / `noformat`, `think [level]` / `nothink`, `showthinking` / `hidethinking`, `verbose` / `quiet` (token counts, speed, and bytes received), `markdown` / `nomarkdown`, `pager` / `nopager`, `autosave` / `noautosave`, `keepalive <time>` (Ollama, default `1h`), `context <4-63>` (K of REU for the history), `baud 38400|57600|115200|230400` (the serial rate; above 38400 on a TeensyROM only, see below), and `drive <8-30>`.
 
 A message that starts with `//` is sent as a message starting with `/`.
@@ -73,7 +73,7 @@ A message that starts with `//` is sent as a message starting with `/`.
 |---|---|
 | RETURN | Send |
 | SHIFT+RETURN | New line in the message |
-| CRSR up / down | Earlier lines you've typed |
+| CRSR up / down (at new prompt) | Earlier lines you've typed |
 | CRSR left / right, DEL | Edit |
 | HOME, CLR | Start of the line, clear it |
 | RUN/STOP | Stop a reply (what arrived is kept) |
@@ -106,13 +106,13 @@ MESSAGE user """Greet me."""
 MESSAGE assistant """Ahoy, matey!"""
 ```
 
-So a chat can move between the C64 and skinnyai, and `ollama create pirate -f pirate.mf` turns it into a model. Copy the file off an SD2IEC card or a disk image (`c1541 disk.d64 -read "pirate.mf,s" pirate.mf`). `/load` reads Modelfiles from elsewhere too: `FROM`, `PARAMETER`, `SYSTEM`, `MESSAGE` with one-line or `"""` values, and the `# name: value` settings comments. Other instructions are skipped. If a loaded chat names a different server and you have an API key set, it asks before sending the key there.
+Saved chats can move between C64s, or between a C64 and a Mac/Linux version of skinnyai, and `ollama create pirate -f pirate.mf` turns it into a model. Copy the file off an SD2IEC card or a disk image (`c1541 disk.d64 -read "pirate.mf,s" pirate.mf`). `/load` reads Modelfiles from elsewhere too: `FROM`, `PARAMETER`, `SYSTEM`, `MESSAGE` with one-line or `"""` values, and the `# name: value` settings comments. Other instructions are skipped. If a loaded chat names a different server and you have an API key set, it asks before sending the key there.
 
 ## Limits and choices
 
-Some things skinnyai does didn't make the trip:
+Some things the fatter version of skinnyai does didn't make the trip:
 
-- **No HTTPS**, so no ollama.com, OpenAI, or Anthropic directly, and no Anthropic API.
+- **No HTTPS**, so no direct connection to ollama.com, OpenAI, or Anthropic, and no Anthropic API.
 - **Tools only for Ollama cloud models** (above), and no MCP, no images or file attachments, no encrypted sessions or sync, no SQLite chat files, no profiles (just `skinnyai.cfg`), and no model-suggested titles. Chats are saved only when you `/save` (or with `/set autosave` once a chat has a name).
 - **Memory:** the conversation lives in the 12 KB of RAM under the I/O area and the KERNAL ROM, or, with an **REU** (RAM Expansion Unit), in up to 63 KB of it: 32 KB by default, changed with `/set context <4-63>` and saved by `/config`. The welcome table says which (`History: REU, 32K of 512K`). The whole history is sent with each message, as in skinnyai. When it fills, the oldest exchanges are dropped, and you're told. A system message holds up to 1 KB and a typed message 600 characters. `/show settings` shows how much is used.
   - More context costs time on each turn: at 38400 baud, 32 KB takes about 9 seconds to send, before the model starts, and the server keeps only its own context's worth (Ollama's `num_ctx`, which you may need to raise: `/set parameter num_ctx 16384`).
@@ -123,7 +123,19 @@ Some things skinnyai does didn't make the trip:
 - **Thinking** (`/set think`) is shown as it streams, between "Thinking..." and "...done thinking.", and isn't kept in the history.
 - `/show license` and `/show template` aren't available (too large), and `/show info` takes a while, since `/api/show` returns many kilobytes.
 
-## How it works
+## For Developers
+
+### Building
+
+You need [cc65](https://cc65.github.io/) (`brew install cc65`). VICE's `c1541` is used to make the disk image.
+
+```bash
+make            # dist/skinnyai.prg and dist/skinnyai.d64
+```
+
+Copy `dist/skinnyai.prg` to the TeensyROM's SD card or USB stick and launch it from the TeensyROM menu, or use the disk image: `LOAD "SKINNYAI",8` then `RUN`.
+
+### Under the Hood
 
 - `src/acia.s`: the SwiftLink driver. Bytes arrive by NMI into a 256-byte ring at `$CF00`. At 3/4 full the handler raises RTS, so the TeensyROM holds further bytes until the program catches up. On a TeensyROM the receive interrupt is off and the chip is polled instead. It also has `rx_pump`, the assembly loop that moves a response body through the JSON tokenizer, and the character set copy.
 - `src/net.c`: the modem (`ATE0`, `ATV1`, `ATI`, `ATC`, `ATDT"host:port"`, `NO CARRIER`, `+++` with guard times) and HTTP/1.0: requests with `Content-Length` (the JSON body is generated twice, once to count it), and responses that are plain, `Content-Length`, or chunked.
@@ -133,9 +145,9 @@ Some things skinnyai does didn't make the trip:
 - `src/screen.c` (direct screen writes, word wrap, markdown color and tables, pager, keyboard mapping), `src/input.c` (the line editor), `src/disk.c` (Modelfiles, `skinnyai.cfg`, the directory, through the KERNAL), `src/main.c` (settings and commands).
 - Memory: BASIC stub at `$0801`; RAM character set `$0800-$0FFF` (it overwrites the stub after it runs); program and its variables `$1000` to about `$C910`; the line editor's recall buffer `$CA80-$CDFF`, where the start-up code (main.c's first-run questions and welcome) runs before anything is typed (`src/boot.s` copies it there); C stack `$CE00-$CEFF` (with static locals, it holds only arguments: the tests never use more than 32 bytes); receive ring `$CF00-$CFFF`; title bar sprite data `$0340` and the REU cache line `$0380` (the cassette buffer); history `$D000-$FFF7`. Text is ASCII inside the program (`src/ascii.h` makes cc65 leave literals alone) and is converted only for the screen, the keyboard, and disk file names.
 
-## Testing in VICE
+### Testing in VICE
 
-No TeensyROM is needed to try it. `tools/fakemodem.js` stands in for the TeensyROM's modem. It answers the same AT commands the way the firmware does, opens real TCP connections, and says `NO CARRIER` when the server hangs up. VICE's emulated SwiftLink connects to it:
+No TeensyROM or SwiftLink is needed to try it. `tools/fakemodem.js` stands in for the TeensyROM's modem. It answers the same AT commands the way the firmware does, opens real TCP connections, and says `NO CARRIER` when the server hangs up. VICE's emulated SwiftLink connects to it:
 
 ```bash
 make vice       # builds, then runs tools/run-vice.sh
@@ -152,13 +164,13 @@ python3 tools/mon.py screen
 python3 tools/mon.py shot test/out/screen.png
 ```
 
-### Automated tests
+#### Automated tests
 
 `make test` runs the tests in [`test/run.py`](test/run.py), which need VICE (`x64sc`, `c1541`), Node, and Python 3. Each test boots the disk image in x64sc with the fake modem, which dials `test/mock-server.js`, a scripted Ollama and OpenAI-compatible server that logs every request. The tests type through the remote monitor, read the screen, check the requests' JSON, and afterwards read the saved files off the disk image. They cover first-run setup, chatting over both APIs (the history sent back, system messages, parameters, thinking, stats, a chunked UTF-8 reply, server errors), web search and page fetching with a cloud model, `/list`, `/show`, markdown, the pager, saving and loading chats, `/config`, an REU, a TeensyROM's polled receive and faster rates, and a C64 with no SwiftLink. `test/run.py openai` runs only the tests whose names contain `openai`. A failed test leaves its screen (`screen.txt` and `screen.png`), logs, and disk image in `test/out/<test>/`. Set `VICE_ARGS=-minimized` to keep the emulator windows out of the way.
 
 GitHub Actions runs them on every push and pull request ([`.github/workflows/test.yml`](.github/workflows/test.yml)), with VICE built from source with its headless UI.
 
-### By hand
+#### Manual testing
 
 `test/chunked-server.js` serves a deliberately awkward chunked response, with chunk extensions, UTF-8, `\u` escapes, and emoji, for the HTTP and text paths. `make CFLAGS="-t c64 -Ors --static-locals -DHIST_TOP=0xD400u"` builds with 1 KB of history, for testing what happens when memory fills. For an REU, add VICE's options: `tools/run-vice.sh -reu -reusize 512`. For the faster rates, `-acia1mode 2` (VICE's Turbo232), with the fake modem saying it's a TeensyROM (above).
 
