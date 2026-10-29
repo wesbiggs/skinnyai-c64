@@ -2,3 +2,4 @@ dist/
 src/*.o
 test/out/
 node_modules/
+__pycache__

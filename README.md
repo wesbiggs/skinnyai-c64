@@ -95,7 +95,7 @@ When the model calls one, a grey `Searching: ...` or `Fetching: ...` line shows,
 `/save` writes a sequential file `<name>.mf` in ASCII with LF line endings. It is an Ollama Modelfile, the same format skinnyai's `/export` writes and its older versions saved:
 
 ```
-# Saved by SkinnyAI 64 0.1
+# Saved by SkinnyAI 64 0.1.0
 # api: ollama
 # host: http://192.168.1.20:11434
 # keep-alive: 1h

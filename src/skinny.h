@@ -2,7 +2,7 @@
 #ifndef SKINNY_H
 #define SKINNY_H
 
-#define VERSION "0.1"
+#define VERSION "0.1.0"
 
 /* ---- acia.s ---- */
 void __fastcall__ acia_init(void);
