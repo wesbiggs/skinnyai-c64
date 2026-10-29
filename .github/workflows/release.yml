@@ -1,0 +1,55 @@
+# On a version tag (v0.1, v1.2.3, ...), builds skinnyai-{version}.d64 and
+# a source bundle and publishes them as a GitHub release.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # Only c1541 is needed from VICE, and Debian's package has it (it's
+      # the ROMs it lacks), so there's no building VICE here.
+      - name: Install cc65 and c1541
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cc65 vice
+
+      - name: Check the tag against VERSION
+        id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          source=$(sed -n 's/^#define VERSION "\(.*\)"$/\1/p' src/skinny.h)
+          if [ "$version" != "$source" ]; then
+            echo "::error::tag $GITHUB_REF_NAME doesn't match VERSION \"$source\" in src/skinny.h"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: make
+
+      - name: Bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p release
+          cp dist/skinnyai.d64 "release/skinnyai-$VERSION.d64"
+          git archive --format=tar.gz --prefix="skinnyai-$VERSION/" -o "release/skinnyai-$VERSION-src.tar.gz" "$GITHUB_REF_NAME"
+          git archive --format=zip --prefix="skinnyai-$VERSION/" -o "release/skinnyai-$VERSION-src.zip" "$GITHUB_REF_NAME"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --title "SkinnyAI 64 $VERSION" --generate-notes --verify-tag
